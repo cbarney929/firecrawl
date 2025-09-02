@@ -64,7 +64,11 @@ const strictMessage =
   "Unrecognized key in body -- please review the v2 API documentation for request body changes";
 
 function normalizeSchemaForOpenAI(schema: any): any {
-  if (!schema || typeof schema !== 'object') return schema;
+  console.log('[DEBUG] normalizeSchemaForOpenAI called with:', JSON.stringify(schema, null, 2));
+  if (!schema || typeof schema !== 'object') {
+    console.log('[DEBUG] normalizeSchemaForOpenAI returning early:', schema);
+    return schema;
+  }
   
   const visited = new WeakSet();
   
@@ -77,6 +81,7 @@ function normalizeSchemaForOpenAI(schema: any): any {
     const normalized = { ...obj };
     
     if (normalized.type === 'object' && normalized.hasOwnProperty('properties') && normalized.hasOwnProperty('additionalProperties')) {
+      console.log('[DEBUG] Removing additionalProperties from:', JSON.stringify(normalized, null, 2));
       delete normalized.additionalProperties;
     }
     
@@ -90,8 +95,10 @@ function normalizeSchemaForOpenAI(schema: any): any {
         } else {
           delete normalized.required;
         }
+        console.log('[DEBUG] Cleaned required array:', normalized.required);
       } else {
         delete normalized.required;
+        console.log('[DEBUG] Removed invalid required array');
       }
     }
     
@@ -104,11 +111,17 @@ function normalizeSchemaForOpenAI(schema: any): any {
     return normalized;
   }
   
-  return normalizeObject(schema);
+  const result = normalizeObject(schema);
+  console.log('[DEBUG] normalizeSchemaForOpenAI result:', JSON.stringify(result, null, 2));
+  return result;
 }
 
 function validateSchemaForOpenAI(schema: any): boolean {
-  if (!schema || typeof schema !== 'object') return true;
+  console.log('[DEBUG] validateSchemaForOpenAI called with:', JSON.stringify(schema, null, 2));
+  if (!schema || typeof schema !== 'object') {
+    console.log('[DEBUG] validateSchemaForOpenAI returning true for non-object:', schema);
+    return true;
+  }
   
   const visited = new WeakSet();
   
@@ -119,6 +132,7 @@ function validateSchemaForOpenAI(schema: any): boolean {
     visited.add(obj);
     
     if (obj.type === 'object' && !obj.hasOwnProperty('properties') && !obj.hasOwnProperty('patternProperties') && obj.additionalProperties === true) {
+      console.log('[DEBUG] Found invalid schema-less dictionary:', JSON.stringify(obj, null, 2));
       return true;
     }
     
@@ -130,7 +144,9 @@ function validateSchemaForOpenAI(schema: any): boolean {
     return false;
   }
   
-  return !hasInvalidStructure(schema);
+  const result = !hasInvalidStructure(schema);
+  console.log('[DEBUG] validateSchemaForOpenAI result:', result);
+  return result;
 }
 
 const OPENAI_SCHEMA_ERROR_MESSAGE = "Schema contains invalid structure for OpenAI: object type with no 'properties' defined but 'additionalProperties: true' (schema-less dictionary not supported by OpenAI). Please define specific properties for your object.";
@@ -247,9 +263,29 @@ const jsonFormatWithOptions = z
   .object({
     type: z.literal("json"),
     schema: z.any().optional()
-      .transform((val) => normalizeSchemaForOpenAI(val))
+      .transform((val) => {
+        try {
+          console.log('[DEBUG] Transform called with:', JSON.stringify(val, null, 2));
+          const result = normalizeSchemaForOpenAI(val);
+          console.log('[DEBUG] Transform result:', JSON.stringify(result, null, 2));
+          return result;
+        } catch (error) {
+          console.error('[ERROR] Schema normalization failed:', error.message, error.stack);
+          throw new Error(`Schema normalization failed: ${error.message}`);
+        }
+      })
       .refine(
-        (val) => validateSchemaForOpenAI(val),
+        (val) => {
+          try {
+            console.log('[DEBUG] Refine called with:', JSON.stringify(val, null, 2));
+            const result = validateSchemaForOpenAI(val);
+            console.log('[DEBUG] Refine result:', result);
+            return result;
+          } catch (error) {
+            console.error('[ERROR] Schema validation failed:', error.message, error.stack);
+            return false;
+          }
+        },
         {
           message: OPENAI_SCHEMA_ERROR_MESSAGE,
         },
@@ -265,9 +301,29 @@ const changeTrackingFormatWithOptions = z
     type: z.literal("changeTracking"),
     prompt: z.string().optional(),
     schema: z.any().optional()
-      .transform((val) => normalizeSchemaForOpenAI(val))
+      .transform((val) => {
+        try {
+          console.log('[DEBUG] Transform called with:', JSON.stringify(val, null, 2));
+          const result = normalizeSchemaForOpenAI(val);
+          console.log('[DEBUG] Transform result:', JSON.stringify(result, null, 2));
+          return result;
+        } catch (error) {
+          console.error('[ERROR] Schema normalization failed:', error.message, error.stack);
+          throw new Error(`Schema normalization failed: ${error.message}`);
+        }
+      })
       .refine(
-        (val) => validateSchemaForOpenAI(val),
+        (val) => {
+          try {
+            console.log('[DEBUG] Refine called with:', JSON.stringify(val, null, 2));
+            const result = validateSchemaForOpenAI(val);
+            console.log('[DEBUG] Refine result:', result);
+            return result;
+          } catch (error) {
+            console.error('[ERROR] Schema validation failed:', error.message, error.stack);
+            return false;
+          }
+        },
         {
           message: OPENAI_SCHEMA_ERROR_MESSAGE,
         },
