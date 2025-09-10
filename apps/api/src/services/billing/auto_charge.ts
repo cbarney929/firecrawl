@@ -317,7 +317,7 @@ async function _autoChargeScale(
       }
     });
   } catch (error) {
-    logger.error(`Failed to acquire lock for auto-recharge`, { error });
+    logger.error("Auto-recharge failed", { error });
     return {
       success: false,
       message: "Failed to acquire lock for auto-recharge",

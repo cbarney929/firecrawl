@@ -111,7 +111,6 @@ export async function createSubscription(
                 : 0;
             const coupon = await stripe.coupons.create({
               name: discount.coupon.name ?? undefined,
-              percent_off: discount.coupon.percent_off ?? undefined,
               duration: duration_in_months > 0 ? "repeating" : "once",
               ...(duration_in_months > 0 ? { duration_in_months } : {}),
               max_redemptions: 1,
