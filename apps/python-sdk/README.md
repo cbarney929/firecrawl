@@ -21,7 +21,7 @@ Here's an example of how to use the SDK:
 from firecrawl import Firecrawl
 from firecrawl.types import ScrapeOptions
 
-firecrawl = Firecrawl(api_key="fc-YOUR_API_KEY")
+firecrawl = Firecrawl(api_key="fc-<YOUR_API_KEY>")
 
 # Scrape a website (v2):
 data = firecrawl.scrape(

@@ -95,7 +95,7 @@ Used to crawl a URL and all accessible subpages. This submits a crawl job and re
 ```bash
 curl -X POST https://api.firecrawl.dev/v2/crawl \
     -H 'Content-Type: application/json' \
-    -H 'Authorization: Bearer fc-YOUR_API_KEY' \
+    -H 'Authorization: Bearer fc-<YOUR_API_KEY>' \
     -d '{
       "url": "https://docs.firecrawl.dev",
       "limit": 10,
@@ -110,8 +110,8 @@ Returns a crawl job id and the url to check the status of the crawl.
 ```json
 {
   "success": true,
-  "id": "123-456-789",
-  "url": "https://api.firecrawl.dev/v2/crawl/123-456-789"
+  "id": "<crawl_id>",
+  "url": "https://api.firecrawl.dev/v2/crawl/<crawl_id>"
 }
 ```
 
@@ -120,9 +120,9 @@ Returns a crawl job id and the url to check the status of the crawl.
 Used to check the status of a crawl job and get its result.
 
 ```bash
-curl -X GET https://api.firecrawl.dev/v2/crawl/123-456-789 \
+curl -X GET https://api.firecrawl.dev/v2/crawl/<crawl_id> \
   -H 'Content-Type: application/json' \
-  -H 'Authorization: Bearer YOUR_API_KEY'
+  -H 'Authorization: Bearer <YOUR_API_KEY>'
 ```
 
 ```json
@@ -155,7 +155,7 @@ Used to scrape a URL and get its content in the specified formats.
 ```bash
 curl -X POST https://api.firecrawl.dev/v2/scrape \
     -H 'Content-Type: application/json' \
-    -H 'Authorization: Bearer YOUR_API_KEY' \
+    -H 'Authorization: Bearer <YOUR_API_KEY>' \
     -d '{
       "url": "https://docs.firecrawl.dev",
       "formats" : ["markdown", "html"]
@@ -196,7 +196,7 @@ Used to map a URL and get urls of the website. This returns most links present o
 ```bash cURL
 curl -X POST https://api.firecrawl.dev/v2/map \
     -H 'Content-Type: application/json' \
-    -H 'Authorization: Bearer YOUR_API_KEY' \
+    -H 'Authorization: Bearer <YOUR_API_KEY>' \
     -d '{
       "url": "https://firecrawl.dev"
     }'
@@ -224,7 +224,7 @@ Map with `search` param allows you to search for specific urls inside a website.
 ```bash cURL
 curl -X POST https://api.firecrawl.dev/v2/map \
     -H 'Content-Type: application/json' \
-    -H 'Authorization: Bearer YOUR_API_KEY' \
+    -H 'Authorization: Bearer <YOUR_API_KEY>' \
     -d '{
       "url": "https://firecrawl.dev",
       "search": "docs"
@@ -258,7 +258,7 @@ Firecrawl’s search API allows you to perform web searches and optionally scrap
 ```bash
 curl -X POST https://api.firecrawl.dev/v2/search \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer fc-YOUR_API_KEY" \
+  -H "Authorization: Bearer fc-<YOUR_API_KEY>" \
   -d '{
     "query": "what is firecrawl?",
     "limit": 5
@@ -290,7 +290,7 @@ curl -X POST https://api.firecrawl.dev/v2/search \
 ```bash
 curl -X POST https://api.firecrawl.dev/v2/search \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer fc-YOUR_API_KEY" \
+  -H "Authorization: Bearer fc-<YOUR_API_KEY>" \
   -d '{
     "query": "what is firecrawl?",
     "limit": 5,
@@ -317,7 +317,7 @@ When you use /*, Firecrawl will automatically crawl and parse all URLs it can di
 ```bash
 curl -X POST https://api.firecrawl.dev/v2/extract \
     -H 'Content-Type: application/json' \
-    -H 'Authorization: Bearer YOUR_API_KEY' \
+    -H 'Authorization: Bearer <YOUR_API_KEY>' \
     -d '{
       "urls": [
         "https://firecrawl.dev/*", 
@@ -376,7 +376,7 @@ Used to extract structured data from scraped pages.
 ```bash
 curl -X POST https://api.firecrawl.dev/v2/scrape \
   -H 'Content-Type: application/json' \
-  -H 'Authorization: Bearer YOUR_API_KEY' \
+  -H 'Authorization: Bearer <YOUR_API_KEY>' \
   -d '{
     "url": "https://www.mendable.ai/",
     "formats": [
@@ -430,7 +430,7 @@ You can now extract without a schema by just passing a `prompt` to the endpoint.
 ```bash
 curl -X POST https://api.firecrawl.dev/v2/scrape \
     -H 'Content-Type: application/json' \
-    -H 'Authorization: Bearer YOUR_API_KEY' \
+    -H 'Authorization: Bearer <YOUR_API_KEY>' \
     -d '{
       "url": "https://docs.firecrawl.dev/",
       "formats": [
@@ -451,7 +451,7 @@ Here is an example of how to use actions to navigate to google.com, search for F
 ```bash
 curl -X POST https://api.firecrawl.dev/v2/scrape \
     -H 'Content-Type: application/json' \
-    -H 'Authorization: Bearer YOUR_API_KEY' \
+    -H 'Authorization: Bearer <YOUR_API_KEY>' \
     -d '{
         "url": "google.com",
         "formats": ["markdown"],
@@ -477,7 +477,7 @@ You can now batch scrape multiple URLs at the same time. It is very similar to h
 ```bash
 curl -X POST https://api.firecrawl.dev/v2/batch/scrape \
     -H 'Content-Type: application/json' \
-    -H 'Authorization: Bearer YOUR_API_KEY' \
+    -H 'Authorization: Bearer <YOUR_API_KEY>' \
     -d '{
       "urls": ["https://docs.firecrawl.dev", "https://docs.firecrawl.dev/sdks/overview"],
       "formats" : ["markdown", "html"]
@@ -499,7 +499,7 @@ pip install firecrawl-py
 ```python
 from firecrawl import Firecrawl
 
-firecrawl = Firecrawl(api_key="fc-YOUR_API_KEY")
+firecrawl = Firecrawl(api_key="fc-<YOUR_API_KEY>")
 
 # Scrape a website (returns a Document)
 doc = firecrawl.scrape(
@@ -561,7 +561,7 @@ npm install @mendable/firecrawl-js
 ```js
 import Firecrawl from '@mendable/firecrawl-js';
 
-const firecrawl = new Firecrawl({ apiKey: 'fc-YOUR_API_KEY' });
+const firecrawl = new Firecrawl({ apiKey: 'fc-<YOUR_API_KEY>' });
 
 // Scrape a website
 const doc = await firecrawl.scrape('https://firecrawl.dev', {
@@ -586,7 +586,7 @@ With LLM extraction, you can easily extract structured data from any URL. We sup
 import Firecrawl from '@mendable/firecrawl-js';
 import { z } from 'zod';
 
-const firecrawl = new Firecrawl({ apiKey: 'fc-YOUR_API_KEY' });
+const firecrawl = new Firecrawl({ apiKey: 'fc-<YOUR_API_KEY>' });
 
 // Define schema to extract contents into
 const schema = z.object({

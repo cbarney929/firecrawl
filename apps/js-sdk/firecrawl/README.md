@@ -20,7 +20,7 @@ Here's an example of how to use the SDK with error handling:
 ```js
 import Firecrawl from '@mendable/firecrawl-js';
 
-const app = new Firecrawl({ apiKey: 'fc-YOUR_API_KEY' });
+const app = new Firecrawl({ apiKey: 'fc-<YOUR_API_KEY>' });
 
 // Scrape a website
 const scrapeResponse = await app.scrape('https://firecrawl.dev', {
@@ -85,7 +85,7 @@ Use `extract` with a prompt and schema. Zod schemas are supported directly.
 import Firecrawl from '@mendable/firecrawl-js';
 import { z } from 'zod';
 
-const app = new Firecrawl({ apiKey: 'fc-YOUR_API_KEY' });
+const app = new Firecrawl({ apiKey: 'fc-<YOUR_API_KEY>' });
 
 const schema = z.object({
   title: z.string(),
@@ -184,7 +184,7 @@ The feature‑frozen v1 is still available under `app.v1` with the original meth
 ```js
 import Firecrawl from '@mendable/firecrawl-js';
 
-const app = new Firecrawl({ apiKey: 'fc-YOUR_API_KEY' });
+const app = new Firecrawl({ apiKey: 'fc-<YOUR_API_KEY>' });
 
 // v1 methods (feature‑frozen)
 const scrapeV1 = await app.v1.scrapeUrl('https://firecrawl.dev', { formats: ['markdown', 'html'] });
