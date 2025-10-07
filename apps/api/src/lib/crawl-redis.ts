@@ -217,20 +217,14 @@ export async function getDoneJobsOrderedUntil(
     "crawl:" + id + ":jobs_donez_ordered",
     24 * 60 * 60,
   );
-  if (count === -1) {
-    return await redisEvictConnection.zrangebyscore(
-      "crawl:" + id + ":jobs_donez_ordered",
-      -Infinity,
-      until,
-    );
-  }
+  const limitCount = count === -1 ? 2147483647 : count;
   return await redisEvictConnection.zrangebyscore(
     "crawl:" + id + ":jobs_donez_ordered",
     -Infinity,
     until,
     "LIMIT",
     start,
-    count,
+    limitCount,
   );
 }
 
