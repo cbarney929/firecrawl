@@ -65,18 +65,24 @@ class HttpClient:
             headers = self._prepare_headers()
 
         data['origin'] = f'python-sdk@{version}'
-            
+
         url = self._build_url(endpoint)
-        
+
+        request_timeout = timeout
+        if request_timeout is None:
+            payload_timeout = data.get("timeout")
+            if isinstance(payload_timeout, (int, float)):
+                request_timeout = payload_timeout / 1000.0 + 5
+
         last_exception = None
-        
+
         for attempt in range(retries):
             try:
                 response = requests.post(
                     url,
                     headers=headers,
                     json=data,
-                    timeout=timeout
+                    timeout=request_timeout
                 )
 
                 if response.status_code == 502:

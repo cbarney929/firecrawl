@@ -36,11 +36,18 @@ class AsyncHttpClient:
     ) -> httpx.Response:
         payload = dict(data)
         payload["origin"] = f"python-sdk@{version}"
+
+        request_timeout = timeout
+        if request_timeout is None:
+            payload_timeout = payload.get("timeout")
+            if isinstance(payload_timeout, (int, float)):
+                request_timeout = payload_timeout / 1000.0 + 5
+
         return await self._client.post(
             endpoint,
             json=payload,
             headers={**self._headers(), **(headers or {})},
-            timeout=timeout,
+            timeout=request_timeout,
         )
 
     async def get(
