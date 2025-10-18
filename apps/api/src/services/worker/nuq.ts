@@ -31,6 +31,7 @@ export type NuQJob<Data = any, ReturnValue = any> = {
   lock?: string;
   ownerId?: string;
   groupId?: string;
+  timesOutAt?: Date;
 };
 
 const listenChannelId = process.env.NUQ_POD_NAME ?? "main";
@@ -46,6 +47,7 @@ type NuQJobOptions = {
   priority?: number;
   ownerId?: string;
   groupId?: string;
+  timesOutAt?: Date;
 };
 
 class NuQ<JobData = any, JobReturnValue = any> {
@@ -333,6 +335,7 @@ class NuQ<JobData = any, JobReturnValue = any> {
     "lock",
     "owner_id",
     "group_id",
+    "times_out_at",
   ];
 
   private rowToJob(row: any): NuQJob<JobData, JobReturnValue> | null {
@@ -350,6 +353,7 @@ class NuQ<JobData = any, JobReturnValue = any> {
       lock: row.lock ?? undefined,
       ownerId: row.owner_id ?? undefined,
       groupId: row.group_id ?? undefined,
+      timesOutAt: row.times_out_at ? new Date(row.times_out_at) : undefined,
     };
   }
 
@@ -547,7 +551,7 @@ class NuQ<JobData = any, JobReturnValue = any> {
         const result = this.rowToJob(
           (
             await nuqPool.query(
-              `INSERT INTO ${this.queueName} (id, data, priority, listen_channel_id, owner_id, group_id) VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT DO NOTHING RETURNING ${this.jobReturning.join(", ")};`,
+              `INSERT INTO ${this.queueName} (id, data, priority, listen_channel_id, owner_id, group_id, times_out_at) VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT DO NOTHING RETURNING ${this.jobReturning.join(", ")};`,
               [
                 id,
                 data,
@@ -555,6 +559,7 @@ class NuQ<JobData = any, JobReturnValue = any> {
                 options.listenable ? listenChannelId : null,
                 normalizedOwnerId ?? null,
                 options.groupId ?? null,
+                options.timesOutAt ? options.timesOutAt.toISOString() : null,
               ],
             )
           ).rows[0],
@@ -607,7 +612,7 @@ class NuQ<JobData = any, JobReturnValue = any> {
         const result = this.rowToJob(
           (
             await nuqPool.query(
-              `INSERT INTO ${this.queueName} (id, data, priority, listen_channel_id, owner_id, group_id) VALUES ($1, $2, $3, $4, $5, $6) RETURNING ${this.jobReturning.join(", ")};`,
+              `INSERT INTO ${this.queueName} (id, data, priority, listen_channel_id, owner_id, group_id, times_out_at) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING ${this.jobReturning.join(", ")};`,
               [
                 id,
                 data,
@@ -615,6 +620,7 @@ class NuQ<JobData = any, JobReturnValue = any> {
                 options.listenable ? listenChannelId : null,
                 normalizedOwnerId ?? null,
                 options.groupId ?? null,
+                options.timesOutAt ? options.timesOutAt.toISOString() : null,
               ],
             )
           ).rows[0],
@@ -666,6 +672,7 @@ class NuQ<JobData = any, JobReturnValue = any> {
         const listenChannelIds: (string | null)[] = [];
         const ownerIds: (string | null)[] = [];
         const groupIds: (string | null)[] = [];
+        const timesOutAts: (string | null)[] = [];
 
         for (const job of jobs) {
           const bareOwnerId = job.options?.ownerId ?? undefined;
@@ -683,14 +690,27 @@ class NuQ<JobData = any, JobReturnValue = any> {
           );
           ownerIds.push(normalizedOwnerId);
           groupIds.push(job.options?.groupId ?? null);
+          timesOutAts.push(
+            job.options?.timesOutAt
+              ? job.options.timesOutAt.toISOString()
+              : null,
+          );
         }
 
         // Bulk insert using UNNEST
         const result = await nuqPool.query(
-          `INSERT INTO ${this.queueName} (id, data, priority, listen_channel_id, owner_id, group_id)
-          SELECT * FROM UNNEST($1::uuid[], $2::jsonb[], $3::int[], $4::text[], $5::uuid[], $6::uuid[])
+          `INSERT INTO ${this.queueName} (id, data, priority, listen_channel_id, owner_id, group_id, times_out_at)
+          SELECT * FROM UNNEST($1::uuid[], $2::jsonb[], $3::int[], $4::text[], $5::uuid[], $6::uuid[], $7::timestamptz[])
           RETURNING ${this.jobReturning.join(", ")};`,
-          [ids, dataArray, priorities, listenChannelIds, ownerIds, groupIds],
+          [
+            ids,
+            dataArray,
+            priorities,
+            listenChannelIds,
+            ownerIds,
+            groupIds,
+            timesOutAts,
+          ],
         );
 
         const createdJobs = result.rows.map(row => this.rowToJob(row)!);
@@ -1799,8 +1819,8 @@ type NuQGroupInstance = {
   id: string;
   status: "active" | "completed";
   createdAt: Date;
-  finishedAt: Date;
-  expiresAt: Date;
+  finishedAt?: Date;
+  expiresAt?: Date;
 };
 
 class NuQGroup {
@@ -1823,8 +1843,8 @@ class NuQGroup {
       id: row.id,
       status: row.status,
       createdAt: new Date(row.created_at),
-      finishedAt: new Date(row.finished_at),
-      expiresAt: new Date(row.expires_at),
+      finishedAt: row.finished_at ? new Date(row.finished_at) : undefined,
+      expiresAt: row.expires_at ? new Date(row.expires_at) : undefined,
     };
   }
 

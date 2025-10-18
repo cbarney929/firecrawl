@@ -33,6 +33,12 @@ export async function addScrapeJob(
     listenable,
     ownerId: webScraperOptions.team_id,
     groupId: webScraperOptions.crawl_id ?? undefined,
+    timesOutAt: webScraperOptions.crawl_id
+      ? undefined
+      : new Date(
+          Date.now() +
+            ((webScraperOptions as any).scrapeOptions?.timeout ?? 300) * 1000,
+        ),
   });
 }
 

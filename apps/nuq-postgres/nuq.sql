@@ -30,6 +30,7 @@ CREATE TABLE IF NOT EXISTS nuq.queue_scrape (
   failedreason text, -- only for selfhost
   owner_id uuid,
   group_id uuid,
+  times_out_at timestamp with time zone,
   CONSTRAINT queue_scrape_pkey PRIMARY KEY (id)
 );
 
@@ -156,6 +157,12 @@ SELECT cron.schedule('nuq_queue_scrape_concurrency_sync', '*/5 * * * *', $$
 
   UPDATE nuq.queue_scrape_owner_concurrency
     SET max_concurrency = (SELECT nuq_queue_scrape_owner_resolve_max_concurrency(nuq.queue_scrape_owner_concurrency.id));
+$$);
+
+SELECT cron.schedule('nuq_queue_scrape_timeout', '* * * * *', $$
+  UPDATE nuq.queue_scrape
+  SET status = 'failed', finished_at = now(), failedreason = 'SCRAPE_TIMEOUT|{"stack":"Error: Scrape timed out\n    in DB","message":"Scrape timed out"}'
+  WHERE status = 'queued' AND times_out_at < now();
 $$);
 
 CREATE TABLE IF NOT EXISTS nuq.group_crawl (
