@@ -340,12 +340,9 @@ export async function concurrentJobDone(job: NuQJob<any>) {
 
         abTestJob(nextJob.job.data);
 
-        await scrapeQueue.addJob(
+        await scrapeQueue.promoteJobFromBacklogOrAdd(
           nextJob.job.id,
-          {
-            ...nextJob.job.data,
-            concurrencyLimitHit: true,
-          },
+          nextJob.job.data,
           {
             priority: nextJob.job.priority,
             listenable: nextJob.job.listenable,

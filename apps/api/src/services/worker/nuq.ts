@@ -585,6 +585,129 @@ class NuQ<JobData = any, JobReturnValue = any> {
     });
   }
 
+  public async addJobs(
+    jobs: Array<{
+      id: string;
+      data: JobData;
+      options: NuQJobOptions;
+    }>,
+  ): Promise<NuQJob<JobData, JobReturnValue>[]> {
+    return withSpan("nuq.addJobs", async span => {
+      setSpanAttributes(span, {
+        "nuq.queue_name": this.queueName,
+        "nuq.jobs_count": jobs.length,
+      });
+
+      if (jobs.length === 0) {
+        return [];
+      }
+
+      const start = Date.now();
+      try {
+        // Separate jobs into backlogged and non-backlogged groups
+        const regularJobs: typeof jobs = [];
+        const backloggedJobs: typeof jobs = [];
+
+        for (const job of jobs) {
+          if (job.options.backlogged) {
+            backloggedJobs.push(job);
+          } else {
+            regularJobs.push(job);
+          }
+        }
+
+        const results: NuQJob<JobData, JobReturnValue>[] = [];
+
+        // Batch size: 6 params per job, stay well under PG's 65535 param limit
+        // 1000 jobs = 6000 params, leaving plenty of headroom
+        const BATCH_SIZE = 1000;
+
+        // Helper function to build and execute bulk insert with batching
+        const bulkInsert = async (
+          jobsToInsert: typeof jobs,
+          tableSuffix: string,
+        ) => {
+          if (jobsToInsert.length === 0) return;
+
+          // Process in batches
+          for (
+            let offset = 0;
+            offset < jobsToInsert.length;
+            offset += BATCH_SIZE
+          ) {
+            const batch = jobsToInsert.slice(offset, offset + BATCH_SIZE);
+
+            // Build the VALUES clause and parameters array
+            const valuesPlaceholders: string[] = [];
+            const params: any[] = [];
+
+            for (let i = 0; i < batch.length; i++) {
+              const job = batch[i];
+              const baseIdx = i * 6 + 1;
+
+              valuesPlaceholders.push(
+                `($${baseIdx}, $${baseIdx + 1}, $${baseIdx + 2}, $${baseIdx + 3}, $${baseIdx + 4}, $${baseIdx + 5})`,
+              );
+
+              params.push(
+                job.id,
+                job.data,
+                job.options.priority ?? 0,
+                job.options.listenable ? listenChannelId : null,
+                normalizeOwnerId(job.options.ownerId),
+                job.options.groupId ?? null,
+              );
+            }
+
+            const query = `INSERT INTO ${this.queueName}${tableSuffix} (id, data, priority, listen_channel_id, owner_id, group_id) VALUES ${valuesPlaceholders.join(", ")} RETURNING ${this.jobReturning.join(", ")};`;
+
+            const result = await nuqPool.query(query, params);
+
+            // Convert rows to jobs and maintain order
+            const jobMap = new Map(
+              result.rows.map(row => [
+                row.id,
+                this.rowToJob(row, tableSuffix === "_backlog")!,
+              ]),
+            );
+
+            for (const job of batch) {
+              const insertedJob = jobMap.get(job.id);
+              if (insertedJob) {
+                results.push(insertedJob);
+              }
+            }
+          }
+        };
+
+        // Insert regular jobs
+        await bulkInsert(regularJobs, "");
+
+        // Insert backlogged jobs
+        await bulkInsert(backloggedJobs, "_backlog");
+
+        setSpanAttributes(span, {
+          "nuq.jobs_created": results.length,
+          "nuq.regular_jobs_count": regularJobs.length,
+          "nuq.backlogged_jobs_count": backloggedJobs.length,
+        });
+
+        return results;
+      } finally {
+        const duration = Date.now() - start;
+        setSpanAttributes(span, {
+          "nuq.duration_ms": duration,
+        });
+        logger.info("nuqAddJobs metrics", {
+          module: "nuq/metrics",
+          method: "nuqAddJobs",
+          duration,
+          jobsCount: jobs.length,
+        });
+      }
+    });
+  }
+
   public async promoteJobFromBacklogOrAdd(
     id: string,
     data: JobData,
