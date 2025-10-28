@@ -134,6 +134,10 @@ function buildFeatureFlags(
     }
   }
 
+  if (hasFormatOfType(options.formats, "branding")) {
+    flags.add("branding");
+  }
+
   if (options.waitFor !== 0) {
     flags.add("waitFor");
   }
