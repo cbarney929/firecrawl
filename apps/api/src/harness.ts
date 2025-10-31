@@ -140,18 +140,9 @@ const logger = {
   },
   processOutput(name: string, line: string, isReduceNoise: boolean) {
     const color = getProcessColor(name);
-    // In CI or test mode, always show output (don't reduce noise)
-    const shouldShow =
-      !isReduceNoise ||
-      process.env.CI === "true" ||
-      !line.includes("[nuq/metrics:");
-    if (shouldShow) {
-      const timestamp =
-        process.env.CI === "true"
-          ? `${colors.dim}[${new Date().toISOString()}]${colors.reset} `
-          : "";
+    if (!(line.includes("[nuq/metrics:") && isReduceNoise)) {
       const label = `${color}${colors.bold}${name.padEnd(14)}${colors.reset}`;
-      console.log(`${timestamp}${label} ${line}`);
+      console.log(`${label} ${line}`);
     }
     stream.write(`${name.padEnd(14)} ${line}\n`);
   },
