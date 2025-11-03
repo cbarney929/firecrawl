@@ -262,7 +262,7 @@ export async function scrapeURLWithFireEngineChromeCDP(
         ? [
             {
               type: "executeJavascript" as const,
-              script: `return {raw: {}};`,
+              script: await loadBrandingScript(),
             },
           ]
         : []),
