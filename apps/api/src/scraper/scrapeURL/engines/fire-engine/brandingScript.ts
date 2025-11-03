@@ -244,7 +244,7 @@ export const getBrandingScript = () => `
       let hasLowAlpha = false;
 
       const alphaMatch = bgColor.match(
-        /(?:rgba?\([^,]*,[^,]*,[^,]*,\s*|color\([^/]*\/\s*)([\d.]+)\)?$/,
+        /(?:rgba?\\([^,]*,[^,]*,[^,]*,\\s*|color\\([^/]*\\/\\s*)([\\d.]+)\\)?$/,
       );
       if (alphaMatch) {
         const alpha = parseFloat(alphaMatch[1]);
@@ -263,7 +263,7 @@ export const getBrandingScript = () => `
             parentBg !== "rgba(0, 0, 0, 0)"
           ) {
             const parentAlphaMatch = parentBg.match(
-              /(?:rgba?\([^,]*,[^,]*,[^,]*,\s*|color\([^/]*\/\s*)([\d.]+)\)?$/,
+              /(?:rgba?\\([^,]*,[^,]*,[^,]*,\\s*|color\\([^/]*\\/\\s*)([\\d.]+)\\)?$/,
             );
             const parentAlpha = parentAlphaMatch
               ? parseFloat(parentAlphaMatch[1])
@@ -469,7 +469,7 @@ export const getBrandingScript = () => `
     const bg =
       getComputedStyle(body).backgroundColor ||
       getComputedStyle(html).backgroundColor;
-    const match = bg.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/);
+    const match = bg.match(/rgba?\\((\\d+),\\s*(\\d+),\\s*(\\d+)/);
     if (match) {
       const [r, g, b] = match.slice(1, 4).map(n => parseInt(n, 10));
       const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
