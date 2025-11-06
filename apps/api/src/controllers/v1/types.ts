@@ -48,7 +48,6 @@ export const url = z.preprocess(
     return x;
   },
   z
-    .string()
     .url()
     .regex(/^https?:\/\//i, "URL uses unsupported protocol")
     .refine(x => {
@@ -180,15 +179,13 @@ function validateSchemaForOpenAI(schema: any): boolean {
 const OPENAI_SCHEMA_ERROR_MESSAGE =
   "Schema contains invalid structure for OpenAI: object type with no 'properties' defined but 'additionalProperties: true' (schema-less dictionary not supported by OpenAI). Please define specific properties for your object.";
 
-export const agentOptionsExtract = z
-  .object({
-    model: z.string().default(agentExtractModelValue),
-  })
-  .strict(strictMessage);
+export const agentOptionsExtract = z.strictObject({
+  model: z.string().prefault(agentExtractModelValue),
+});
 
 export const extractOptions = z
-  .object({
-    mode: z.enum(["llm"]).default("llm"),
+  .strictObject({
+    mode: z.enum(["llm"]).prefault("llm"),
     schema: z
       .any()
       .optional()
@@ -203,18 +200,17 @@ export const extractOptions = z
           }
         },
         {
-          message: "Invalid JSON schema.",
+          error: "Invalid JSON schema.",
         },
       )
       .transform(val => normalizeSchemaForOpenAI(val))
       .refine(val => validateSchemaForOpenAI(val), {
         message: OPENAI_SCHEMA_ERROR_MESSAGE,
       }),
-    systemPrompt: z.string().max(10000).default(""),
+    systemPrompt: z.string().max(10000).prefault(""),
     prompt: z.string().max(10000).optional(),
     temperature: z.number().optional(),
   })
-  .strict(strictMessage)
   .transform(data => ({
     ...data,
     systemPrompt:
@@ -222,8 +218,8 @@ export const extractOptions = z
   }));
 
 const extractOptionsWithAgent = z
-  .object({
-    mode: z.enum(["llm"]).default("llm"),
+  .strictObject({
+    mode: z.enum(["llm"]).prefault("llm"),
     schema: z
       .any()
       .optional()
@@ -238,24 +234,23 @@ const extractOptionsWithAgent = z
           }
         },
         {
-          message: "Invalid JSON schema.",
+          error: "Invalid JSON schema.",
         },
       )
       .transform(val => normalizeSchemaForOpenAI(val))
       .refine(val => validateSchemaForOpenAI(val), {
         message: OPENAI_SCHEMA_ERROR_MESSAGE,
       }),
-    systemPrompt: z.string().max(10000).default(""),
+    systemPrompt: z.string().max(10000).prefault(""),
     prompt: z.string().max(10000).optional(),
     temperature: z.number().optional(),
     agent: z
-      .object({
-        model: z.string().default(agentExtractModelValue),
+      .strictObject({
+        model: z.string().prefault(agentExtractModelValue),
         prompt: z.string().optional(),
       })
       .optional(),
   })
-  .strict(strictMessage)
   .transform(data => ({
     ...data,
     systemPrompt: isAgentExtractModelValid(data.agent?.model)
@@ -304,7 +299,7 @@ const actionSchema = z.union([
   z
     .object({
       type: z.literal("wait"),
-      milliseconds: z.number().int().positive().finite().optional(),
+      milliseconds: z.int().positive().finite().optional(),
       selector: z.string().optional(),
     })
     .refine(
@@ -312,18 +307,18 @@ const actionSchema = z.union([
         (data.milliseconds !== undefined || data.selector !== undefined) &&
         !(data.milliseconds !== undefined && data.selector !== undefined),
       {
-        message:
+        error:
           "Either 'milliseconds' or 'selector' must be provided, but not both.",
       },
     ),
   z.object({
     type: z.literal("click"),
     selector: z.string(),
-    all: z.boolean().default(false),
+    all: z.boolean().prefault(false),
   }),
   z.object({
     type: z.literal("screenshot"),
-    fullPage: z.boolean().default(false),
+    fullPage: z.boolean().prefault(false),
     quality: z.number().min(1).max(100).optional(),
   }),
   z.object({
@@ -336,7 +331,7 @@ const actionSchema = z.union([
   }),
   z.object({
     type: z.literal("scroll"),
-    direction: z.enum(["up", "down"]).optional().default("down"),
+    direction: z.enum(["up", "down"]).optional().prefault("down"),
     selector: z.string().optional(),
   }),
   z.object({
@@ -348,8 +343,8 @@ const actionSchema = z.union([
   }),
   z.object({
     type: z.literal("pdf"),
-    landscape: z.boolean().default(false),
-    scale: z.number().default(1),
+    landscape: z.boolean().prefault(false),
+    scale: z.number().prefault(1),
     format: z
       .enum([
         "A0",
@@ -364,7 +359,7 @@ const actionSchema = z.union([
         "Tabloid",
         "Ledger",
       ])
-      .default("Letter"),
+      .prefault("Letter"),
   }),
 ]);
 
@@ -411,129 +406,118 @@ function transformIframeSelector(selector: string): string {
   });
 }
 
-const baseScrapeOptions = z
-  .object({
-    formats: z
-      .enum([
-        "markdown",
-        "html",
-        "rawHtml",
-        "links",
-        "screenshot",
-        "screenshot@fullPage",
-        "extract",
-        "json",
-        "summary",
-        "changeTracking",
-        "branding",
-      ])
-      .array()
-      .optional()
-      .default(["markdown"])
-      .refine(
-        x => !(x.includes("screenshot") && x.includes("screenshot@fullPage")),
-        "You may only specify either screenshot or screenshot@fullPage",
-      )
-      .refine(
-        x => !x.includes("changeTracking") || x.includes("markdown"),
-        "The changeTracking format requires the markdown format to be specified as well",
-      ),
-    headers: z.record(z.string(), z.string()).optional(),
-    includeTags: z
-      .string()
-      .array()
-      .transform(tags => tags.map(transformIframeSelector))
-      .optional(),
-    excludeTags: z
-      .string()
-      .array()
-      .transform(tags => tags.map(transformIframeSelector))
-      .optional(),
-    onlyMainContent: z.boolean().default(true),
-    timeout: z.number().int().positive().finite().safe().optional(),
-    waitFor: z
-      .number()
-      .int()
-      .nonnegative()
-      .finite()
-      .safe()
-      .max(60000)
-      .default(0),
-    // Deprecate this to jsonOptions
-    extract: extractOptions.optional(),
-    // New
-    jsonOptions: extractOptions.optional(),
-    changeTrackingOptions: z
-      .object({
-        prompt: z.string().optional(),
-        schema: z
-          .any()
-          .optional()
-          .refine(
-            val => {
-              if (!val) return true; // Allow undefined schema
-              try {
-                const validate = ajv.compile(val);
-                return typeof validate === "function";
-              } catch (e) {
-                return false;
-              }
-            },
-            {
-              message: "Invalid JSON schema.",
-            },
-          )
-          .transform(val => normalizeSchemaForOpenAI(val))
-          .refine(val => validateSchemaForOpenAI(val), {
-            message: OPENAI_SCHEMA_ERROR_MESSAGE,
-          }),
-        modes: z.enum(["json", "git-diff"]).array().optional().default([]),
-        tag: z.string().or(z.null()).default(null),
-      })
-      .optional(),
-    mobile: z.boolean().default(false),
-    parsePDF: z.boolean().default(true),
-    actions: actionsSchema.optional(),
-    // New
-    location: locationSchema,
+const baseScrapeOptions = z.strictObject({
+  formats: z
+    .enum([
+      "markdown",
+      "html",
+      "rawHtml",
+      "links",
+      "screenshot",
+      "screenshot@fullPage",
+      "extract",
+      "json",
+      "summary",
+      "changeTracking",
+      "branding",
+    ])
+    .array()
+    .optional()
+    .prefault(["markdown"])
+    .refine(
+      x => !(x.includes("screenshot") && x.includes("screenshot@fullPage")),
+      "You may only specify either screenshot or screenshot@fullPage",
+    )
+    .refine(
+      x => !x.includes("changeTracking") || x.includes("markdown"),
+      "The changeTracking format requires the markdown format to be specified as well",
+    ),
+  headers: z.record(z.string(), z.string()).optional(),
+  includeTags: z
+    .string()
+    .array()
+    .transform(tags => tags.map(transformIframeSelector))
+    .optional(),
+  excludeTags: z
+    .string()
+    .array()
+    .transform(tags => tags.map(transformIframeSelector))
+    .optional(),
+  onlyMainContent: z.boolean().prefault(true),
+  timeout: z.int().positive().finite().optional(),
+  waitFor: z.int().nonnegative().finite().max(60000).prefault(0),
+  // Deprecate this to jsonOptions
+  extract: extractOptions.optional(),
+  // New
+  jsonOptions: extractOptions.optional(),
+  changeTrackingOptions: z
+    .strictObject({
+      prompt: z.string().optional(),
+      schema: z
+        .any()
+        .optional()
+        .refine(
+          val => {
+            if (!val) return true; // Allow undefined schema
+            try {
+              const validate = ajv.compile(val);
+              return typeof validate === "function";
+            } catch (e) {
+              return false;
+            }
+          },
+          {
+            error: "Invalid JSON schema.",
+          },
+        )
+        .transform(val => normalizeSchemaForOpenAI(val))
+        .refine(val => validateSchemaForOpenAI(val), {
+          message: OPENAI_SCHEMA_ERROR_MESSAGE,
+        }),
+      modes: z.enum(["json", "git-diff"]).array().optional().prefault([]),
+      tag: z.string().or(z.null()).prefault(null),
+    })
+    .optional(),
+  mobile: z.boolean().prefault(false),
+  parsePDF: z.boolean().prefault(true),
+  actions: actionsSchema.optional(),
+  // New
+  location: locationSchema,
 
-    // Deprecated
-    geolocation: z
-      .object({
-        country: z
-          .string()
-          .optional()
-          .refine(
-            val => !val || Object.keys(countries).includes(val.toUpperCase()),
-            {
-              message:
-                "Invalid country code. Please use a valid ISO 3166-1 alpha-2 country code.",
-            },
-          )
-          .transform(val => (val ? val.toUpperCase() : "US-generic")),
-        languages: z.string().array().optional(),
-      })
-      .optional(),
-    skipTlsVerification: z.boolean().optional(),
-    removeBase64Images: z.boolean().default(true),
-    fastMode: z.boolean().default(false),
-    useMock: z.string().optional(),
-    blockAds: z.boolean().default(true),
-    proxy: z.enum(["basic", "stealth", "auto"]).default("basic"),
-    maxAge: z
-      .number()
-      .int()
-      .gte(0)
-      .safe()
-      .default(1 * 24 * 60 * 60 * 1000),
-    storeInCache: z.boolean().default(true),
-    // @deprecated
-    __experimental_cache: z.boolean().default(false).optional(),
-    __searchPreviewToken: z.string().optional(),
-    __experimental_omce: z.boolean().default(false).optional(),
-    __experimental_omceDomain: z.string().optional(),
-  })
-  .strict(strictMessage);
+  // Deprecated
+  geolocation: z
+    .strictObject({
+      country: z
+        .string()
+        .optional()
+        .refine(
+          val => !val || Object.keys(countries).includes(val.toUpperCase()),
+          {
+            error:
+              "Invalid country code. Please use a valid ISO 3166-1 alpha-2 country code.",
+          },
+        )
+        .transform(val => (val ? val.toUpperCase() : "US-generic")),
+      languages: z.string().array().optional(),
+    })
+    .optional(),
+  skipTlsVerification: z.boolean().optional(),
+  removeBase64Images: z.boolean().prefault(true),
+  fastMode: z.boolean().prefault(false),
+  useMock: z.string().optional(),
+  blockAds: z.boolean().prefault(true),
+  proxy: z.enum(["basic", "stealth", "auto"]).prefault("basic"),
+  maxAge: z
+    .int()
+    .gte(0)
+    .prefault(1 * 24 * 60 * 60 * 1000),
+  storeInCache: z.boolean().prefault(true),
+  // @deprecated
+  __experimental_cache: z.boolean().prefault(false).optional(),
+  __searchPreviewToken: z.string().optional(),
+  __experimental_omce: z.boolean().prefault(false).optional(),
+  __experimental_omceDomain: z.string().optional(),
+});
 
 const fire1Refine = obj => {
   if (
@@ -629,7 +613,7 @@ export const scrapeOptions = baseScrapeOptions
   .extend({
     agent: z
       .object({
-        model: z.string().default(agentExtractModelValue),
+        model: z.string().prefault(agentExtractModelValue),
         prompt: z.string(),
         sessionId: z.string().optional(),
         waitBeforeClosingMs: z.number().optional(),
@@ -674,7 +658,7 @@ export type ScrapeOptions = BaseScrapeOptions & {
 const ajv = new Ajv();
 
 const extractV1Options = z
-  .object({
+  .strictObject({
     urls: url
       .array()
       .max(10, "Maximum of 10 URLs allowed per request while in beta.")
@@ -695,42 +679,41 @@ const extractV1Options = z
           }
         },
         {
-          message: "Invalid JSON schema.",
+          error: "Invalid JSON schema.",
         },
       )
       .transform(val => normalizeSchemaForOpenAI(val))
       .refine(val => validateSchemaForOpenAI(val), {
         message: OPENAI_SCHEMA_ERROR_MESSAGE,
       }),
-    limit: z.number().int().positive().finite().safe().optional(),
-    ignoreSitemap: z.boolean().default(false),
-    includeSubdomains: z.boolean().default(true),
-    allowExternalLinks: z.boolean().default(false),
-    enableWebSearch: z.boolean().default(false),
+    limit: z.int().positive().finite().optional(),
+    ignoreSitemap: z.boolean().prefault(false),
+    includeSubdomains: z.boolean().prefault(true),
+    allowExternalLinks: z.boolean().prefault(false),
+    enableWebSearch: z.boolean().prefault(false),
     scrapeOptions: baseScrapeOptions
-      .default({ onlyMainContent: false })
+      .prefault({ onlyMainContent: false })
       .optional(),
-    origin: z.string().optional().default("api"),
+    origin: z.string().optional().prefault("api"),
     integration: integrationSchema.optional().transform(val => val || null),
-    urlTrace: z.boolean().default(false),
-    timeout: z.number().int().positive().finite().safe().default(60000),
-    __experimental_streamSteps: z.boolean().default(false),
-    __experimental_llmUsage: z.boolean().default(false),
-    __experimental_showSources: z.boolean().default(false),
-    showSources: z.boolean().default(false),
+    urlTrace: z.boolean().prefault(false),
+    timeout: z.int().positive().finite().prefault(60000),
+    __experimental_streamSteps: z.boolean().prefault(false),
+    __experimental_llmUsage: z.boolean().prefault(false),
+    __experimental_showSources: z.boolean().prefault(false),
+    showSources: z.boolean().prefault(false),
     __experimental_cacheKey: z.string().optional(),
     __experimental_cacheMode: z
       .enum(["direct", "save", "load"])
-      .default("direct")
+      .prefault("direct")
       .optional(),
     agent: agentOptionsExtract.optional(),
-    __experimental_showCostTracking: z.boolean().default(false),
-    ignoreInvalidURLs: z.boolean().default(false),
+    __experimental_showCostTracking: z.boolean().prefault(false),
+    ignoreInvalidURLs: z.boolean().prefault(false),
     webhook: webhookSchema.optional(),
   })
-  .strict(strictMessage)
   .refine(obj => obj.urls || obj.prompt, {
-    message: "Either 'urls' or 'prompt' must be provided.",
+    error: "Either 'urls' or 'prompt' must be provided.",
   })
   .transform(obj => ({
     ...obj,
@@ -765,7 +748,7 @@ export const scrapeRequestSchema = baseScrapeOptions
     url,
     agent: z
       .object({
-        model: z.string().default(agentExtractModelValue),
+        model: z.string().prefault(agentExtractModelValue),
         prompt: z.string(),
         sessionId: z.string().optional(),
         waitBeforeClosingMs: z.number().optional(),
@@ -773,9 +756,9 @@ export const scrapeRequestSchema = baseScrapeOptions
       .optional(),
     extract: extractOptionsWithAgent.optional(),
     jsonOptions: extractOptionsWithAgent.optional(),
-    origin: z.string().optional().default("api"),
+    origin: z.string().optional().prefault("api"),
     integration: integrationSchema.optional().transform(val => val || null),
-    timeout: z.number().int().positive().finite().safe().default(30000),
+    timeout: z.int().positive().finite().prefault(30000),
     zeroDataRetention: z.boolean().optional(),
   })
   .strict(strictMessage)
@@ -792,12 +775,12 @@ export type ScrapeRequestInput = z.input<typeof scrapeRequestSchema>;
 export const batchScrapeRequestSchema = baseScrapeOptions
   .extend({
     urls: url.array().min(1),
-    origin: z.string().optional().default("api"),
+    origin: z.string().optional().prefault("api"),
     integration: integrationSchema.optional().transform(val => val || null),
     webhook: webhookSchema.optional(),
-    appendToId: z.string().uuid().optional(),
-    ignoreInvalidURLs: z.boolean().default(false),
-    maxConcurrency: z.number().positive().int().optional(),
+    appendToId: z.uuid().optional(),
+    ignoreInvalidURLs: z.boolean().prefault(false),
+    maxConcurrency: z.int().positive().optional(),
     zeroDataRetention: z.boolean().optional(),
   })
   .strict(strictMessage)
@@ -809,12 +792,12 @@ export const batchScrapeRequestSchema = baseScrapeOptions
 export const batchScrapeRequestSchemaNoURLValidation = baseScrapeOptions
   .extend({
     urls: z.string().array().min(1),
-    origin: z.string().optional().default("api"),
+    origin: z.string().optional().prefault("api"),
     integration: integrationSchema.optional().transform(val => val || null),
     webhook: webhookSchema.optional(),
-    appendToId: z.string().uuid().optional(),
-    ignoreInvalidURLs: z.boolean().default(false),
-    maxConcurrency: z.number().positive().int().optional(),
+    appendToId: z.uuid().optional(),
+    ignoreInvalidURLs: z.boolean().prefault(false),
+    maxConcurrency: z.int().positive().optional(),
     zeroDataRetention: z.boolean().optional(),
   })
   .strict(strictMessage)
@@ -826,25 +809,23 @@ export const batchScrapeRequestSchemaNoURLValidation = baseScrapeOptions
 export type BatchScrapeRequest = z.infer<typeof batchScrapeRequestSchema>;
 export type BatchScrapeRequestInput = z.input<typeof batchScrapeRequestSchema>;
 
-const crawlerOptions = z
-  .object({
-    includePaths: z.string().array().default([]),
-    excludePaths: z.string().array().default([]),
-    maxDepth: z.number().default(10), // default?
-    maxDiscoveryDepth: z.number().optional(),
-    limit: z.number().default(10000), // default?
-    allowBackwardLinks: z.boolean().default(false), // DEPRECATED: use crawlEntireDomain
-    crawlEntireDomain: z.boolean().optional(),
-    allowExternalLinks: z.boolean().default(false),
-    allowSubdomains: z.boolean().default(false),
-    ignoreRobotsTxt: z.boolean().default(false),
-    ignoreSitemap: z.boolean().default(false),
-    deduplicateSimilarURLs: z.boolean().default(true),
-    ignoreQueryParameters: z.boolean().default(false),
-    regexOnFullURL: z.boolean().default(false),
-    delay: z.number().positive().optional(),
-  })
-  .strict(strictMessage);
+const crawlerOptions = z.strictObject({
+  includePaths: z.string().array().prefault([]),
+  excludePaths: z.string().array().prefault([]),
+  maxDepth: z.number().prefault(10), // default?
+  maxDiscoveryDepth: z.number().optional(),
+  limit: z.number().prefault(10000), // default?
+  allowBackwardLinks: z.boolean().prefault(false), // DEPRECATED: use crawlEntireDomain
+  crawlEntireDomain: z.boolean().optional(),
+  allowExternalLinks: z.boolean().prefault(false),
+  allowSubdomains: z.boolean().prefault(false),
+  ignoreRobotsTxt: z.boolean().prefault(false),
+  ignoreSitemap: z.boolean().prefault(false),
+  deduplicateSimilarURLs: z.boolean().prefault(true),
+  ignoreQueryParameters: z.boolean().prefault(false),
+  regexOnFullURL: z.boolean().prefault(false),
+  delay: z.number().positive().optional(),
+});
 
 // export type CrawlerOptions = {
 //   includePaths?: string[];
@@ -862,12 +843,12 @@ type CrawlerOptions = z.infer<typeof crawlerOptions>;
 export const crawlRequestSchema = crawlerOptions
   .extend({
     url,
-    origin: z.string().optional().default("api"),
+    origin: z.string().optional().prefault("api"),
     integration: integrationSchema.optional().transform(val => val || null),
     scrapeOptions: baseScrapeOptions.default({}),
     webhook: webhookSchema.optional(),
-    limit: z.number().default(10000),
-    maxConcurrency: z.number().positive().int().optional(),
+    limit: z.number().prefault(10000),
+    maxConcurrency: z.int().positive().optional(),
     zeroDataRetention: z.boolean().optional(),
   })
   .strict(strictMessage)
@@ -920,18 +901,18 @@ export const mapRequestSchema = crawlerOptions
   .omit({ ignoreQueryParameters: true })
   .extend({
     url,
-    origin: z.string().optional().default("api"),
+    origin: z.string().optional().prefault("api"),
     integration: integrationSchema.optional().transform(val => val || null),
-    includeSubdomains: z.boolean().default(true),
+    includeSubdomains: z.boolean().prefault(true),
     search: z.string().optional(),
-    ignoreQueryParameters: z.boolean().default(true),
-    ignoreSitemap: z.boolean().default(false),
-    sitemapOnly: z.boolean().default(false),
-    limit: z.number().min(1).max(MAX_MAP_LIMIT).default(5000),
+    ignoreQueryParameters: z.boolean().prefault(true),
+    ignoreSitemap: z.boolean().prefault(false),
+    sitemapOnly: z.boolean().prefault(false),
+    limit: z.number().min(1).max(MAX_MAP_LIMIT).prefault(5000),
     timeout: z.number().positive().finite().optional(),
     useMock: z.string().optional(),
-    filterByPath: z.boolean().default(true),
-    useIndex: z.boolean().default(true),
+    filterByPath: z.boolean().prefault(true),
+    useIndex: z.boolean().prefault(true),
     location: locationSchema,
   })
   .strict(strictMessage);
@@ -1452,26 +1433,18 @@ export function toLegacyDocument(
 }
 
 export const searchRequestSchema = z
-  .object({
+  .strictObject({
     query: z.string(),
-    limit: z
-      .number()
-      .int()
-      .positive()
-      .finite()
-      .safe()
-      .max(100)
-      .optional()
-      .default(5),
+    limit: z.int().positive().finite().max(100).optional().prefault(5),
     tbs: z.string().optional(),
     filter: z.string().optional(),
-    lang: z.string().optional().default("en"),
+    lang: z.string().optional().prefault("en"),
     country: z.string().optional(),
     location: z.string().optional(),
-    origin: z.string().optional().default("api"),
+    origin: z.string().optional().prefault("api"),
     integration: integrationSchema.optional().transform(val => val || null),
-    timeout: z.number().int().positive().finite().safe().default(60000),
-    ignoreInvalidURLs: z.boolean().optional().default(false),
+    timeout: z.int().positive().finite().prefault(60000),
+    ignoreInvalidURLs: z.boolean().optional().prefault(false),
     __searchPreviewToken: z.string().optional(),
     scrapeOptions: baseScrapeOptions
       .extend({
@@ -1488,13 +1461,10 @@ export const searchRequestSchema = z
               "json",
             ]),
           )
-          .default([]),
+          .prefault([]),
       })
-      .default({}),
+      .prefault({}),
   })
-  .strict(
-    "Unrecognized key in body -- please review the v1 API documentation for request body changes",
-  )
   .refine(x => extractRefine(x.scrapeOptions), extractRefineOpts)
   .refine(x => fire1Refine(x.scrapeOptions), fire1RefineOpts)
   .refine(x => waitForRefine(x.scrapeOptions), waitForRefineOpts)
@@ -1530,15 +1500,15 @@ export const generateLLMsTextRequestSchema = z.object({
     .number()
     .min(1)
     .max(5000)
-    .default(10)
+    .prefault(10)
     .describe("Maximum number of URLs to process"),
   showFullText: z
     .boolean()
-    .default(false)
+    .prefault(false)
     .describe("Whether to show the full LLMs-full.txt in the response"),
   cache: z
     .boolean()
-    .default(true)
+    .prefault(true)
     .describe("Whether to use cached content if available"),
   __experimental_stream: z.boolean().optional(),
 });

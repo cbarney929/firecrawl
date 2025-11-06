@@ -9,7 +9,7 @@ import { buildPromptWithWebsiteStructure } from "../../lib/map-utils";
 // Define the request schema for params preview
 // Only url and prompt are required/relevant for preview
 const crawlParamsPreviewRequestSchema = z.object({
-  url: z.string().url(),
+  url: z.url(),
   prompt: z.string().max(10000),
 });
 

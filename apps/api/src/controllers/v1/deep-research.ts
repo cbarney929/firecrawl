@@ -12,19 +12,19 @@ const deepResearchRequestSchema = z
       .number()
       .min(1)
       .max(12)
-      .default(7)
+      .prefault(7)
       .describe("Maximum depth of research iterations"),
     maxUrls: z
       .number()
       .min(1)
       .max(1000)
-      .default(20)
+      .prefault(20)
       .describe("Maximum number of URLs to analyze"),
     timeLimit: z
       .number()
       .min(30)
       .max(600)
-      .default(300)
+      .prefault(300)
       .describe("Time limit in seconds"),
     analysisPrompt: z
       .string()
@@ -34,13 +34,13 @@ const deepResearchRequestSchema = z
       .string()
       .describe("The system prompt to use for the research agent")
       .optional(),
-    formats: z.array(z.enum(["markdown", "json"])).default(["markdown"]),
+    formats: z.array(z.enum(["markdown", "json"])).prefault(["markdown"]),
     // @deprecated Use query instead
     topic: z.string().describe("The topic or question to research").optional(),
     jsonOptions: extractOptions.optional(),
   })
   .refine(data => data.query || data.topic, {
-    message: "Either query or topic must be provided",
+    error: "Either query or topic must be provided",
   })
   .refine(
     obj => {
@@ -51,7 +51,7 @@ const deepResearchRequestSchema = z
       );
     },
     {
-      message:
+      error:
         "When 'json' format is specified, jsonOptions must be provided, and vice versa",
     },
   )
