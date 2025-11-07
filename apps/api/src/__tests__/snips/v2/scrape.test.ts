@@ -1508,12 +1508,9 @@ describe("Scrape tests", () => {
                   type: "json",
                   prompt: "Extract company info as JSON",
                   schema: {
-                    prompt: "Extract company info as JSON",
-                    schema: {
-                      type: "object",
-                      properties: {
-                        name: { type: "string" },
-                      },
+                    type: "object",
+                    properties: {
+                      name: { type: "string" },
                     },
                   },
                 },
