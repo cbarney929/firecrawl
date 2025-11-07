@@ -746,7 +746,7 @@ async function scrapeURLLoop(meta: Meta): Promise<ScrapeUrlResponse> {
           ? { title: engineResult.pdfMetadata.title }
           : {}),
         contentType: engineResult.contentType,
-        proxyUsed: meta.featureFlags.has("stealthProxy") ? "stealth" : "basic",
+        proxyUsed: engineResult.proxyUsed ?? "basic",
         ...(fallbackList.find(x =>
           ["index", "index;documents"].includes(x.engine),
         )
