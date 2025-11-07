@@ -457,6 +457,9 @@ export async function generateCompletions({
                     llmsTxtId: metadata.llmsTxtId ?? "unspecified",
                   },
                 },
+                openai: {
+                  strictJsonSchema: true,
+                },
               },
               experimental_telemetry: {
                 isEnabled: true,
@@ -625,6 +628,9 @@ export async function generateCompletions({
                   llmsTxtId: metadata.llmsTxtId ?? "unspecified",
                 },
               },
+              openai: {
+                strictJsonSchema: true,
+              },
             },
             experimental_telemetry: {
               isEnabled: true,
@@ -705,6 +711,9 @@ export async function generateCompletions({
             deepResearchId: metadata.deepResearchId ?? "unspecified",
             llmsTxtId: metadata.llmsTxtId ?? "unspecified",
           },
+        },
+        openai: {
+          strictJsonSchema: true,
         },
       },
       system: options.systemPrompt,
