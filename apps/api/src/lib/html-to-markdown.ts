@@ -6,6 +6,7 @@ import dotenv from "dotenv";
 import { logger } from "./logger";
 import { stat } from "fs/promises";
 import { HTML_TO_MARKDOWN_PATH } from "../natives";
+import { convertHTMLToMarkdownWithHttpService } from "./html-to-markdown-client";
 dotenv.config();
 
 // TODO: add a timeout to the Go parser
@@ -55,6 +56,26 @@ export async function parseMarkdown(
 ): Promise<string> {
   if (!html) {
     return "";
+  }
+
+  // Try HTTP service first if enabled
+  if (process.env.HTML_TO_MARKDOWN_SERVICE_URL) {
+    try {
+      let markdownContent = await convertHTMLToMarkdownWithHttpService(html);
+      markdownContent = processMultiLineLinks(markdownContent);
+      markdownContent = removeSkipToContentLinks(markdownContent);
+      return markdownContent;
+    } catch (error) {
+      logger.error(
+        "Error converting HTML to Markdown with HTTP service, falling back to original parser",
+        { error },
+      );
+      Sentry.captureException(error, {
+        tags: {
+          fallback: "original_parser",
+        },
+      });
+    }
   }
 
   try {
