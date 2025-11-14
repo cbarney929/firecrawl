@@ -11,7 +11,7 @@ def _prepare(urls: List[str], *, options: Optional[ScrapeOptions] = None, **kwar
     if not urls:
         raise ValueError("URLs list cannot be empty")
 
-    validated_urls = validate_batch_urls(urls)
+    validated_urls = validate_batch_urls([u.strip() for u in urls])
     payload: Dict[str, Any] = {"urls": validated_urls}
     if options:
         opts = prepare_scrape_options(options)
