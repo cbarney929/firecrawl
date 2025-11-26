@@ -28,7 +28,7 @@ def main():
     print(doc.metadata_dict.get("source_url"))
     print('metadata_dict.get("title"):', doc.metadata_dict.get("title"))
     print("metadata_typed.title:", doc.metadata_typed.title)
-    print("metadata.title", doc.metadata.title)  # pyright: ignore[reportOptionalMemberAccess]  # type: ignore[union-attr]
+    print("metadata.title", doc.metadata.title if doc.metadata else None)
 
 
     # Crawl (waits until terminal state)
