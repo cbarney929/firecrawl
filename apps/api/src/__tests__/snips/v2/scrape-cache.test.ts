@@ -1,5 +1,5 @@
 import { describeIf, TEST_PRODUCTION } from "../lib";
-import { Identity, idmux, scrapeTimeout, scrape } from "./lib";
+import { Identity, idmux, scrapeTimeout, scrape, scrapeRaw } from "./lib";
 import crypto from "crypto";
 
 describeIf(TEST_PRODUCTION)("V2 Scrape Default maxAge", () => {
@@ -141,20 +141,17 @@ describeIf(TEST_PRODUCTION)("V2 Scrape Default maxAge", () => {
       await new Promise(resolve => setTimeout(resolve, 20000));
 
       // Second scrape with minAge should fail
-      try {
-        await scrape(
-          {
-            url,
-            minAge: 60000,
-          },
-          identity,
-        );
-        fail("Expected scrape to throw error");
-      } catch (error) {
-        expect(error.response.status).toBe(404);
-        expect(error.response.data.success).toBe(false);
-        expect(error.response.data.code).toBe("SCRAPE_NO_CACHED_DATA");
-      }
+      const response = await scrapeRaw(
+        {
+          url,
+          minAge: 60000,
+        },
+        identity,
+      );
+
+      expect(response.statusCode).toBe(404);
+      expect(response.body.success).toBe(false);
+      expect(response.body.code).toBe("SCRAPE_NO_CACHED_DATA");
     },
     scrapeTimeout * 2 + 20000,
   );
