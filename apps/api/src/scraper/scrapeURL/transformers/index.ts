@@ -71,8 +71,15 @@ async function deriveMarkdownFromHTML(
     );
   }
 
-  // Skip markdown conversion for sitemap scrapes
-  if (meta.internalOptions.teamId === "sitemap") {
+  // Only derive markdown if markdown format is requested or if changeTracking is requested
+  // (changeTracking requires markdown)
+  const hasMarkdown = hasFormatOfType(meta.options.formats, "markdown");
+  const hasChangeTracking = hasFormatOfType(
+    meta.options.formats,
+    "changeTracking",
+  );
+
+  if (!hasMarkdown && !hasChangeTracking) {
     return document;
   }
 
