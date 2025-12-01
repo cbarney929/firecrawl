@@ -71,6 +71,11 @@ async function deriveMarkdownFromHTML(
     );
   }
 
+  // Skip markdown conversion for sitemap scrapes
+  if (meta.internalOptions.teamId === "sitemap") {
+    return document;
+  }
+
   if (document.metadata.contentType?.includes("application/json")) {
     if (document.rawHtml === undefined) {
       throw new Error(

@@ -529,4 +529,28 @@ describe("Standalone scrapeURL tests", () => {
     },
     30000,
   );
+
+  it("Sitemap scrape should not convert to markdown", async () => {
+    const out = await scrapeURL(
+      "test:sitemap-no-markdown",
+      "https://www.scrapethissite.com/sitemap.xml",
+      scrapeOptions.parse({
+        formats: ["rawHtml"],
+      }),
+      { teamId: "sitemap" },
+      new CostTracking(),
+    );
+
+    expect(out.success).toBe(true);
+    if (out.success) {
+      expect(out.document.warning).toBeUndefined();
+      // Sitemap scrapes should not have markdown field
+      expect(out.document).not.toHaveProperty("markdown");
+      // But should have rawHtml
+      expect(out.document).toHaveProperty("rawHtml");
+      expect(out.document.rawHtml).toBeTruthy();
+      expect(out.document).toHaveProperty("metadata");
+      expect(out.document.metadata.error).toBeUndefined();
+    }
+  }, 30000);
 });
