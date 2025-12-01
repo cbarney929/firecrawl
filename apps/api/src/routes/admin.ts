@@ -16,6 +16,7 @@ import { realtimeSearchController } from "../controllers/v2/f-search";
 import { concurrencyQueueBackfillController } from "../controllers/v0/admin/concurrency-queue-backfill";
 import { integCreateUserController } from "../controllers/v0/admin/create-user";
 import { integValidateApiKeyController } from "../controllers/v0/admin/validate-api-key";
+import { crawlMigrationController } from "../controllers/v0/admin/crawl-migration";
 
 export const adminRouter = express.Router();
 
@@ -87,4 +88,9 @@ adminRouter.post(
 adminRouter.post(
   `/admin/integration/validate-api-key`,
   wrap(integValidateApiKeyController),
+);
+
+adminRouter.post(
+  `/admin/${process.env.BULL_AUTH_KEY}/crawl-migration`,
+  wrap(crawlMigrationController),
 );
