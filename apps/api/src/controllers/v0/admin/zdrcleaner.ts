@@ -106,7 +106,10 @@ async function cleanUpRequests(specificTeamId: string | null, _logger: Logger) {
     method: "cleanUpRequests",
   });
 
-  const cleanedUpRequestIds = new Set<string>();
+  // Track all blobs that need cleanup for each request
+  const requestBlobs = new Map<string, Set<string>>();
+  // Track which blobs were successfully cleaned up
+  const successfulBlobs = new Set<string>();
 
   try {
     for (let i = 0; ; i++) {
@@ -131,6 +134,14 @@ async function cleanUpRequests(specificTeamId: string | null, _logger: Logger) {
         break;
       }
 
+      // Track all blobs for each request before processing
+      for (const row of rows as { request_id: string; blob_id: string }[]) {
+        if (!requestBlobs.has(row.request_id)) {
+          requestBlobs.set(row.request_id, new Set());
+        }
+        requestBlobs.get(row.request_id)!.add(row.blob_id);
+      }
+
       // Process in batches of 50 for GCS cleanup
       for (let j = 0; j < Math.ceil(rows.length / 50); j++) {
         const batch = rows.slice(j * 50, (j + 1) * 50);
@@ -138,7 +149,7 @@ async function cleanUpRequests(specificTeamId: string | null, _logger: Logger) {
           batch.map(async (row: { request_id: string; blob_id: string }) => {
             try {
               await cleanUpJob(row.blob_id);
-              cleanedUpRequestIds.add(row.request_id);
+              successfulBlobs.add(row.blob_id);
             } catch (error) {
               logger.error(`Error cleaning up blob`, {
                 method: "cleanUpJob",
@@ -162,22 +173,32 @@ async function cleanUpRequests(specificTeamId: string | null, _logger: Logger) {
     });
   }
 
-  // Clear dr_clean_by on all requests that had blobs cleaned up
-  if (cleanedUpRequestIds.size > 0) {
+  // Only clear dr_clean_by on requests where ALL blobs were successfully cleaned up
+  const fullyCleanedRequests: string[] = [];
+  for (const [requestId, blobIds] of requestBlobs) {
+    const allBlobsCleaned = [...blobIds].every(blobId =>
+      successfulBlobs.has(blobId),
+    );
+    if (allBlobsCleaned) {
+      fullyCleanedRequests.push(requestId);
+    }
+  }
+
+  if (fullyCleanedRequests.length > 0) {
     try {
       await supabase_service
         .from("requests")
         .update({
           dr_clean_by: null,
         })
-        .in("id", Array.from(cleanedUpRequestIds))
+        .in("id", fullyCleanedRequests)
         .throwOnError();
 
-      logger.info(`Cleaned up ${cleanedUpRequestIds.size} requests`);
+      logger.info(`Cleaned up ${fullyCleanedRequests.length} requests`);
     } catch (error) {
       logger.error(`Error clearing dr_clean_by on requests`, {
         error,
-        requestCount: cleanedUpRequestIds.size,
+        requestCount: fullyCleanedRequests.length,
       });
     }
   }
