@@ -137,7 +137,12 @@ async function scrapeSearchResult(
       isSearchPreview,
     );
 
-    const doc: Document = await waitForJob(jobId, options.timeout, false);
+    const doc: Document = await waitForJob(
+      jobId,
+      options.timeout,
+      options.zeroDataRetention ?? false,
+      logger,
+    );
 
     logger.info("Scrape job completed", {
       scrapeId: jobId,
