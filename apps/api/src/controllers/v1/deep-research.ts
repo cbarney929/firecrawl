@@ -5,7 +5,7 @@ import { getDeepResearchQueue } from "../../services/queue-service";
 import * as Sentry from "@sentry/node";
 import { saveDeepResearch } from "../../lib/deep-research/deep-research-redis";
 import { z } from "zod";
-import { includesFormat } from "../../lib/format-utils";
+import { logRequest } from "../../services/logging/log_job";
 
 const deepResearchRequestSchema = z
   .object({
@@ -14,19 +14,19 @@ const deepResearchRequestSchema = z
       .number()
       .min(1)
       .max(12)
-      .prefault(7)
+      .default(7)
       .describe("Maximum depth of research iterations"),
     maxUrls: z
       .number()
       .min(1)
       .max(1000)
-      .prefault(20)
+      .default(20)
       .describe("Maximum number of URLs to analyze"),
     timeLimit: z
       .number()
       .min(30)
       .max(600)
-      .prefault(300)
+      .default(300)
       .describe("Time limit in seconds"),
     analysisPrompt: z
       .string()
@@ -36,24 +36,24 @@ const deepResearchRequestSchema = z
       .string()
       .describe("The system prompt to use for the research agent")
       .optional(),
-    formats: z.array(z.enum(["markdown", "json"])).prefault(["markdown"]),
+    formats: z.array(z.enum(["markdown", "json"])).default(["markdown"]),
     // @deprecated Use query instead
     topic: z.string().describe("The topic or question to research").optional(),
     jsonOptions: extractOptions.optional(),
   })
   .refine(data => data.query || data.topic, {
-    error: "Either query or topic must be provided",
+    message: "Either query or topic must be provided",
   })
   .refine(
     obj => {
-      const hasJsonFormat = includesFormat(obj.formats, "json");
+      const hasJsonFormat = obj.formats?.includes("json");
       const hasJsonOptions = obj.jsonOptions !== undefined;
       return (
         (hasJsonFormat && hasJsonOptions) || (!hasJsonFormat && !hasJsonOptions)
       );
     },
     {
-      error:
+      message:
         "When 'json' format is specified, jsonOptions must be provided, and vice versa",
     },
   )
@@ -92,6 +92,17 @@ export async function deepResearchController(
   req.body = deepResearchRequestSchema.parse(req.body);
 
   const researchId = uuidv7();
+
+  await logRequest({
+    id: researchId,
+    kind: "deep_research",
+    api_version: "v1",
+    team_id: req.auth.team_id,
+    origin: "api",
+    target_hint: req.body.query ?? "",
+    zeroDataRetention: false, // not supported for deep research
+  });
+
   const jobData = {
     request: req.body,
     teamId: req.auth.team_id,

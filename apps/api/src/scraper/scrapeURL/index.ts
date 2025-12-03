@@ -78,6 +78,7 @@ export type ScrapeUrlResponse =
   | {
       success: true;
       document: Document;
+      unsupportedFeatures?: Set<FeatureFlag>;
     }
   | {
       success: false;
@@ -384,7 +385,10 @@ async function scrapeURLLoopIter(
     );
 
     let checkMarkdown: string;
-    if (meta.internalOptions.teamId === "sitemap") {
+    if (
+      meta.internalOptions.teamId === "sitemap" ||
+      meta.internalOptions.teamId === "robots-txt"
+    ) {
       checkMarkdown = engineResult.html?.trim() ?? "";
     } else {
       checkMarkdown = await parseMarkdown(
@@ -835,6 +839,7 @@ async function scrapeURLLoop(meta: Meta): Promise<ScrapeUrlResponse> {
     return {
       success: true,
       document,
+      unsupportedFeatures: result.unsupportedFeatures,
     };
   });
 }

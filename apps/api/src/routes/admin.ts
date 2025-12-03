@@ -1,6 +1,6 @@
 import express from "express";
 import { redisHealthController } from "../controllers/v0/admin/redis-health";
-import { authMiddleware, blocklistMiddleware, wrap } from "./shared";
+import { wrap } from "./shared";
 import { acucCacheClearController } from "../controllers/v0/admin/acuc-cache-clear";
 import { checkFireEngine } from "../controllers/v0/admin/check-fire-engine";
 import { cclogController } from "../controllers/v0/admin/cclog";
@@ -11,7 +11,6 @@ import {
   metricsController,
   nuqMetricsController,
 } from "../controllers/v0/admin/metrics";
-import { crawlCheckController } from "../controllers/v0/admin/crawl-check";
 import { realtimeSearchController } from "../controllers/v2/f-search";
 import { concurrencyQueueBackfillController } from "../controllers/v0/admin/concurrency-queue-backfill";
 import { integCreateUserController } from "../controllers/v0/admin/create-user";
@@ -62,11 +61,6 @@ adminRouter.get(
 adminRouter.get(
   `/admin/${process.env.BULL_AUTH_KEY}/nuq-metrics`,
   wrap(nuqMetricsController),
-);
-
-adminRouter.get(
-  `/admin/${process.env.BULL_AUTH_KEY}/crawl-check`,
-  wrap(crawlCheckController),
 );
 
 adminRouter.post(

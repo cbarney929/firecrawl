@@ -26,18 +26,20 @@ import { BLOCKLISTED_URL_MESSAGE } from "../../lib/strings";
 import { isUrlBlocked } from "../../scraper/WebScraper/utils/blocklist";
 import { checkPermissions } from "../../lib/permissions";
 import { crawlGroup } from "../../services/worker/nuq";
+import { logRequest } from "../../services/logging/log_job";
 
 export async function batchScrapeController(
   req: RequestWithAuth<{}, BatchScrapeResponse, BatchScrapeRequest>,
   res: Response<BatchScrapeResponse>,
 ) {
   const preNormalizedBody = { ...req.body };
-  const parsedBody =
-    preNormalizedBody?.ignoreInvalidURLs === true
-      ? batchScrapeRequestSchemaNoURLValidation.parse(preNormalizedBody)
-      : batchScrapeRequestSchema.parse(preNormalizedBody);
+  if (req.body?.ignoreInvalidURLs === true) {
+    req.body = batchScrapeRequestSchemaNoURLValidation.parse(req.body);
+  } else {
+    req.body = batchScrapeRequestSchema.parse(req.body);
+  }
 
-  const permissions = checkPermissions(parsedBody, req.acuc?.flags);
+  const permissions = checkPermissions(req.body, req.acuc?.flags);
   if (permissions.error) {
     return res.status(403).json({
       success: false,
@@ -46,10 +48,9 @@ export async function batchScrapeController(
   }
 
   const zeroDataRetention =
-    req.acuc?.flags?.forceZDR || parsedBody.zeroDataRetention;
+    req.acuc?.flags?.forceZDR || req.body.zeroDataRetention;
 
-  const id = parsedBody.appendToId ?? uuidv7();
-
+  const id = req.body.appendToId ?? uuidv7();
   const logger = _logger.child({
     crawlId: id,
     batchScrapeId: id,
@@ -59,15 +60,16 @@ export async function batchScrapeController(
     zeroDataRetention,
   });
 
-  let urls: string[] = parsedBody.urls;
+  let urls: string[] = req.body.urls;
+  let unnormalizedURLs = preNormalizedBody.urls;
   let invalidURLs: string[] | undefined = undefined;
 
-  if (parsedBody.ignoreInvalidURLs) {
+  if (req.body.ignoreInvalidURLs) {
     invalidURLs = [];
 
     let pendingURLs = urls;
     urls = [];
-    const unnormalizedURLs: string[] = [];
+    unnormalizedURLs = [];
     for (const u of pendingURLs) {
       try {
         const nu = urlSchema.parse(u);
@@ -83,7 +85,7 @@ export async function batchScrapeController(
     }
   } else {
     if (
-      parsedBody.urls?.some((url: string) =>
+      req.body.urls?.some((url: string) =>
         isUrlBlocked(url, req.acuc?.flags ?? null),
       )
     ) {
@@ -105,27 +107,28 @@ export async function batchScrapeController(
 
   logger.debug("Batch scrape " + id + " starting", {
     urlsLength: urls.length,
-    appendToId: parsedBody.appendToId,
+    appendToId: req.body.appendToId,
     account: req.account,
   });
 
-  // Extract scrapeOptions from parsedBody, excluding non-scrapeOptions fields
-  const {
-    urls: _urls,
-    appendToId: _appendToId,
-    webhook: _webhook,
-    integration: _integration,
-    maxConcurrency: _maxConcurrency,
-    zeroDataRetention: _zeroDataRetention,
-    ignoreInvalidURLs: _ignoreInvalidURLs,
-    ...scrapeOptions
-  } = parsedBody;
+  if (!req.body.appendToId) {
+    await logRequest({
+      id,
+      kind: "batch_scrape",
+      api_version: "v2",
+      team_id: req.auth.team_id,
+      origin: req.body.origin ?? "api",
+      integration: req.body.integration,
+      target_hint: urls[0] ?? "",
+      zeroDataRetention: zeroDataRetention || false,
+    });
+  }
 
-  const sc: StoredCrawl = parsedBody.appendToId
-    ? ((await getCrawl(parsedBody.appendToId)) as StoredCrawl)
+  const sc: StoredCrawl = req.body.appendToId
+    ? ((await getCrawl(req.body.appendToId)) as StoredCrawl)
     : {
         crawlerOptions: null,
-        scrapeOptions: scrapeOptions as ScrapeOptions,
+        scrapeOptions: req.body,
         internalOptions: {
           disableSmartWaitCache: true,
           teamId: req.auth.team_id,
@@ -136,11 +139,11 @@ export async function batchScrapeController(
         }, // NOTE: smart wait disabled for batch scrapes to ensure contentful scrape, speed does not matter
         team_id: req.auth.team_id,
         createdAt: Date.now(),
-        maxConcurrency: parsedBody.maxConcurrency,
+        maxConcurrency: req.body.maxConcurrency,
         zeroDataRetention,
       };
 
-  if (!parsedBody.appendToId) {
+  if (!req.body.appendToId) {
     await crawlGroup.addGroup(
       id,
       sc.team_id,
@@ -163,6 +166,10 @@ export async function batchScrapeController(
   }
   logger.debug("Using job priority " + jobPriority, { jobPriority });
 
+  const scrapeOptions: ScrapeOptions = { ...req.body };
+  delete (scrapeOptions as any).urls;
+  delete (scrapeOptions as any).appendToId;
+
   const jobs = urls.map(x => ({
     jobId: uuidv7(),
     data: {
@@ -170,15 +177,15 @@ export async function batchScrapeController(
       mode: "single_urls" as const,
       team_id: req.auth.team_id,
       crawlerOptions: null,
-      scrapeOptions: scrapeOptions as ScrapeOptions,
+      scrapeOptions,
       origin: "api",
-      integration: parsedBody.integration,
+      integration: req.body.integration,
       crawl_id: id,
       sitemapped: true,
       v1: true,
-      webhook: parsedBody.webhook,
+      webhook: req.body.webhook,
       internalOptions: sc.internalOptions,
-      zeroDataRetention: zeroDataRetention ?? false,
+      zeroDataRetention,
       apiKeyId: req.acuc?.api_key_id ?? null,
     },
     priority: jobPriority,
@@ -202,14 +209,14 @@ export async function batchScrapeController(
   logger.debug("Adding scrape jobs to BullMQ...");
   await addScrapeJobs(jobs);
 
-  if (parsedBody.webhook) {
+  if (req.body.webhook) {
     logger.debug("Calling webhook with batch_scrape.started...", {
-      webhook: parsedBody.webhook,
+      webhook: req.body.webhook,
     });
     const sender = await createWebhookSender({
       teamId: req.auth.team_id,
       jobId: id,
-      webhook: parsedBody.webhook,
+      webhook: req.body.webhook,
       v0: false,
     });
     await sender?.send(WebhookEvent.BATCH_SCRAPE_STARTED, { success: true });

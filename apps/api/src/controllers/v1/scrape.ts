@@ -18,6 +18,7 @@ import { teamConcurrencySemaphore } from "../../services/worker/team-semaphore";
 import { processJobInternal } from "../../services/worker/scrape-worker";
 import { ScrapeJobData } from "../../types";
 import { AbortManagerThrownError } from "../../scraper/scrapeURL/lib/abortManager";
+import { logRequest } from "../../services/logging/log_job";
 
 export async function scrapeController(
   req: RequestWithAuth<{}, ScrapeResponse, ScrapeRequest>,
@@ -61,6 +62,17 @@ export async function scrapeController(
     request: req.body,
     originalRequest: preNormalizedBody,
     account: req.account,
+  });
+
+  await logRequest({
+    id: jobId,
+    kind: "scrape",
+    api_version: "v1",
+    team_id: req.auth.team_id,
+    origin: req.body.origin,
+    integration: req.body.integration,
+    target_hint: req.body.url,
+    zeroDataRetention: zeroDataRetention || false,
   });
 
   const origin = req.body.origin;
