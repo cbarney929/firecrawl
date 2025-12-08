@@ -5,7 +5,9 @@ import {
   scrapeOptions,
   ScrapeOptions,
   MAX_MAP_LIMIT,
+  MapCrawlerOptions,
 } from "../controllers/v2/types";
+
 import { crawlToCrawler, StoredCrawl } from "./crawl-redis";
 import {
   checkAndUpdateURLForMap,
@@ -98,7 +100,7 @@ export async function getMapResults({
   search?: string;
   limit?: number;
   includeSubdomains?: boolean;
-  crawlerOptions?: any;
+  crawlerOptions?: MapCrawlerOptions;
   teamId: string;
   origin?: string;
   includeMetadata?: boolean;
@@ -132,7 +134,7 @@ export async function getMapResults({
     originUrl: url,
     crawlerOptions: {
       ...crawlerOptions,
-      limit: crawlerOptions.sitemapOnly ? 10000000 : limit,
+      limit: crawlerOptions.sitemap === "only" ? 10000000 : limit,
       scrapeOptions: undefined,
     },
     scrapeOptions: scrapeOptions.parse({
@@ -153,7 +155,7 @@ export async function getMapResults({
     // Robots.txt fetch failed, continue without it
   }
 
-  // If sitemapOnly is true, only get links from sitemap
+  // If sitemap is "only", only get links from sitemap
   if (crawlerOptions.sitemap === "only") {
     const sitemap = await crawler.tryGetSitemap(
       urls => {

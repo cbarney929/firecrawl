@@ -96,6 +96,43 @@ describe("Map tests", () => {
     },
   );
 
+  concurrentIf(ALLOW_TEST_SUITE_WEBSITE)(
+    "sitemapOnly: true works at API level",
+    async () => {
+      const response = await map(
+        {
+          url: base,
+          sitemapOnly: true,
+          limit: 10,
+        },
+        identity,
+      );
+
+      expect(response.statusCode).toBe(200);
+      expect(response.body.success).toBe(true);
+      expect(response.body.links.length).toBe(10);
+    },
+  );
+
+  concurrentIf(ALLOW_TEST_SUITE_WEBSITE)(
+    "ignoreSitemap: true works at API level",
+    async () => {
+      const response = await map(
+        {
+          url: base,
+          ignoreSitemap: true,
+          limit: 10,
+        },
+        identity,
+      );
+
+      expect(response.statusCode).toBe(200);
+      expect(response.body.success).toBe(true);
+      expect(Array.isArray(response.body.links)).toBe(true);
+      expect(response.body.links.length).toBeGreaterThan(0);
+    },
+  );
+
   // TODO: port to new system
   it.concurrent(
     "shows warning when results ≤ 1 and URL is not base domain",

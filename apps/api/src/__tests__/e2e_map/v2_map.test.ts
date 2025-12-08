@@ -43,7 +43,8 @@ describe("E2E Tests for Map V2 API Routes", () => {
   it.concurrent(
     "should handle sitemapOnly parameter (transformed to sitemap='only')",
     async () => {
-      const response = await request(TEST_URL)
+      // First, get results with sitemapOnly to verify it works
+      const sitemapOnlyResponse = await request(TEST_URL)
         .post("/v2/map")
         .set("Authorization", `Bearer ${config.TEST_API_KEY}`)
         .set("Content-Type", "application/json")
@@ -53,10 +54,48 @@ describe("E2E Tests for Map V2 API Routes", () => {
           limit: 10,
         });
 
+      expect(sitemapOnlyResponse.statusCode).toBe(200);
+      expect(sitemapOnlyResponse.body).toHaveProperty("success", true);
+      expect(sitemapOnlyResponse.body).toHaveProperty("links");
+      expect(Array.isArray(sitemapOnlyResponse.body.links)).toBe(true);
+
+      // Verify it produces the same results as sitemap: "only"
+      const sitemapOnlyDirectResponse = await request(TEST_URL)
+        .post("/v2/map")
+        .set("Authorization", `Bearer ${config.TEST_API_KEY}`)
+        .set("Content-Type", "application/json")
+        .send({
+          url: "https://firecrawl.dev",
+          sitemap: "only",
+          limit: 10,
+        });
+
+      expect(sitemapOnlyDirectResponse.statusCode).toBe(200);
+      // Both should return the same number of links (sitemap-only results)
+      expect(sitemapOnlyResponse.body.links.length).toBe(
+        sitemapOnlyDirectResponse.body.links.length,
+      );
+    },
+    60000,
+  );
+
+  it.concurrent(
+    "should handle sitemap='only' parameter directly",
+    async () => {
+      const response = await request(TEST_URL)
+        .post("/v2/map")
+        .set("Authorization", `Bearer ${config.TEST_API_KEY}`)
+        .set("Content-Type", "application/json")
+        .send({
+          url: "https://firecrawl.dev",
+          sitemap: "only",
+          limit: 10,
+        });
+
       expect(response.statusCode).toBe(200);
       expect(response.body).toHaveProperty("success", true);
-      expect(response.body).toHaveProperty("web");
-      expect(Array.isArray(response.body.web)).toBe(true);
+      expect(response.body).toHaveProperty("links");
+      expect(Array.isArray(response.body.links)).toBe(true);
     },
     60000,
   );
@@ -76,7 +115,29 @@ describe("E2E Tests for Map V2 API Routes", () => {
 
       expect(response.statusCode).toBe(200);
       expect(response.body).toHaveProperty("success", true);
-      expect(response.body).toHaveProperty("web");
+      expect(response.body).toHaveProperty("links");
+      expect(Array.isArray(response.body.links)).toBe(true);
+    },
+    60000,
+  );
+
+  it.concurrent(
+    "should handle sitemap='skip' parameter directly",
+    async () => {
+      const response = await request(TEST_URL)
+        .post("/v2/map")
+        .set("Authorization", `Bearer ${config.TEST_API_KEY}`)
+        .set("Content-Type", "application/json")
+        .send({
+          url: "https://firecrawl.dev",
+          sitemap: "skip",
+          limit: 10,
+        });
+
+      expect(response.statusCode).toBe(200);
+      expect(response.body).toHaveProperty("success", true);
+      expect(response.body).toHaveProperty("links");
+      expect(Array.isArray(response.body.links)).toBe(true);
     },
     60000,
   );
@@ -96,9 +157,8 @@ describe("E2E Tests for Map V2 API Routes", () => {
 
       expect(response.statusCode).toBe(200);
       expect(response.body).toHaveProperty("success", true);
-      expect(response.body).toHaveProperty("web");
-      expect(response.body).toHaveProperty("metadata");
-      expect(response.body.metadata).toHaveProperty("searchQuery", "pricing");
+      expect(response.body).toHaveProperty("links");
+      expect(Array.isArray(response.body.links)).toBe(true);
     },
     60000,
   );
