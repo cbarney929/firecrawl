@@ -31,6 +31,32 @@ function sanitizeString(value: string | null | undefined): string | null {
   return value.replace(/\u0000/g, "");
 }
 
+function isDuplicateKeyError(error: any): boolean {
+  const code = (error as any)?.code;
+  // Supabase/PostgREST commonly uses string codes; Sentry serialization may show numbers.
+  if (code === "23505" || code === 23505) return true;
+
+  const message = (error as any)?.message;
+  if (
+    typeof message === "string" &&
+    message
+      .toLowerCase()
+      .includes("duplicate key value violates unique constraint")
+  ) {
+    return true;
+  }
+
+  const details = (error as any)?.details;
+  if (
+    typeof details === "string" &&
+    details.toLowerCase().includes("already exists")
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
 async function robustInsert(
   table: string,
   data: any,
@@ -53,6 +79,19 @@ async function robustInsert(
       try {
         const { error } = await supabase_service.from(table).insert(data);
         if (error) {
+          if (isDuplicateKeyError(error)) {
+            // Idempotency: in distributed worker systems a job can be re-run.
+            // For our logging tables, duplicates mean "already logged", so treat as success.
+            logger.warn(
+              "Duplicate key on insert; treating as already inserted",
+              {
+                table,
+                error,
+              },
+            );
+            done = true;
+            break;
+          }
           lastError = error;
           logger.error(
             "Error inserting into database due to Supabase error, trying again",
@@ -64,6 +103,14 @@ async function robustInsert(
           break;
         }
       } catch (error) {
+        if (isDuplicateKeyError(error)) {
+          logger.warn("Duplicate key on insert; treating as already inserted", {
+            table,
+            error,
+          });
+          done = true;
+          break;
+        }
         lastError = error;
         logger.error(
           "Error inserting into database due to unknown error, trying again",
@@ -101,6 +148,13 @@ async function robustInsert(
     try {
       const { error } = await supabase_service.from(table).insert(data);
       if (error) {
+        if (isDuplicateKeyError(error)) {
+          logger.warn("Duplicate key on insert; treating as already inserted", {
+            table,
+            error,
+          });
+          return;
+        }
         logger.error("Error inserting into database due to Supabase error", {
           error,
           table,
@@ -122,6 +176,13 @@ async function robustInsert(
         logger.info("Inserted into database successfully", { table });
       }
     } catch (error) {
+      if (isDuplicateKeyError(error)) {
+        logger.warn("Duplicate key on insert; treating as already inserted", {
+          table,
+          error,
+        });
+        return;
+      }
       logger.error("Error inserting into database due to unknown error", {
         error,
         table,

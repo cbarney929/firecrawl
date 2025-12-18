@@ -13,7 +13,7 @@ import {
   ExtractResult,
   performExtraction,
 } from "../lib/extract/extraction-service";
-import { updateExtract } from "../lib/extract/extract-redis";
+import { getExtract, updateExtract } from "../lib/extract/extract-redis";
 import { performExtraction_F0 } from "../lib/extract/fire-0/extraction-service-f0";
 import { createWebhookSender, WebhookEvent } from "./webhook";
 import Express from "express";
@@ -48,9 +48,51 @@ const processExtractJobInternal = async (
     teamId: job.data?.teamId ?? undefined,
   });
 
+  // If BullMQ ever re-processes a job (e.g. lost lock / stalled), avoid double-billing/logging.
+  try {
+    const existing = await getExtract(job.data.extractId);
+    if (existing?.status === "completed") {
+      logger.warn("Extract already completed in Redis; skipping reprocessing", {
+        extractId: job.data.extractId,
+        jobId: job.id,
+      });
+
+      const dedupedResult: ExtractResult = {
+        success: true,
+        extractId: job.data.extractId,
+        warning: "Deduped re-processed job: extract already completed",
+        llmUsage: existing.llmUsage,
+        sources: existing.sources,
+        tokensBilled: existing.tokensBilled,
+        creditsBilled: existing.creditsBilled,
+      };
+
+      try {
+        await job.moveToCompleted(dedupedResult, token, false);
+      } catch (error) {
+        logger.error("Failed to move deduped job to completed", { error });
+      }
+
+      return dedupedResult;
+    }
+  } catch (error) {
+    logger.warn("Failed to check extract status in Redis; continuing", {
+      error,
+    });
+  }
+
   const extendLockInterval = setInterval(async () => {
-    logger.info(`🔄 Worker extending lock on job ${job.id}`);
-    await job.extendLock(token, jobLockExtensionTime);
+    try {
+      logger.info(`🔄 Worker extending lock on job ${job.id}`);
+      await job.extendLock(token, jobLockExtensionTime);
+    } catch (error) {
+      // If we lose the lock, BullMQ may re-process this job. We keep running, but
+      // the Redis short-circuit above prevents double side-effects on re-runs.
+      logger.error("Failed extending BullMQ job lock", {
+        error,
+        jobId: job.id,
+      });
+    }
   }, jobLockExtendInterval);
 
   const sender = await createWebhookSender({
@@ -197,8 +239,8 @@ const workerFun = async (
 
   const worker = new Worker(queue.name, null, {
     connection: getRedisConnection(),
-    lockDuration: 60 * 1000, // 60 seconds
-    stalledInterval: 60 * 1000, // 60 seconds
+    lockDuration: config.WORKER_LOCK_DURATION,
+    stalledInterval: config.WORKER_STALLED_CHECK_INTERVAL,
     maxStalledCount: 10, // 10 times
   });
 

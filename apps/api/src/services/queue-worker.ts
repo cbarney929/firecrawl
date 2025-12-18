@@ -52,8 +52,15 @@ const processDeepResearchJobInternal = async (
   });
 
   const extendLockInterval = setInterval(async () => {
-    logger.info(`🔄 Worker extending lock on job ${job.id}`);
-    await job.extendLock(token, jobLockExtensionTime);
+    try {
+      logger.info(`🔄 Worker extending lock on job ${job.id}`);
+      await job.extendLock(token, jobLockExtensionTime);
+    } catch (error) {
+      logger.error("Failed extending BullMQ job lock", {
+        error,
+        jobId: job.id,
+      });
+    }
   }, jobLockExtendInterval);
 
   try {
@@ -134,8 +141,15 @@ const processGenerateLlmsTxtJobInternal = async (
   });
 
   const extendLockInterval = setInterval(async () => {
-    logger.info(`🔄 Worker extending lock on job ${job.id}`);
-    await job.extendLock(token, jobLockExtensionTime);
+    try {
+      logger.info(`🔄 Worker extending lock on job ${job.id}`);
+      await job.extendLock(token, jobLockExtensionTime);
+    } catch (error) {
+      logger.error("Failed extending BullMQ job lock", {
+        error,
+        jobId: job.id,
+      });
+    }
   }, jobLockExtendInterval);
 
   try {
@@ -253,8 +267,8 @@ const workerFun = async (
 
   const worker = new Worker(queue.name, null, {
     connection: getRedisConnection(),
-    lockDuration: 60 * 1000, // 60 seconds
-    stalledInterval: 60 * 1000, // 60 seconds
+    lockDuration: config.WORKER_LOCK_DURATION,
+    stalledInterval: config.WORKER_STALLED_CHECK_INTERVAL,
     maxStalledCount: 10, // 10 times
   });
 
