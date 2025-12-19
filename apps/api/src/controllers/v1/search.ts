@@ -140,7 +140,6 @@ async function scrapeSearchResult(
           zeroDataRetention,
         },
         origin: options.origin,
-        is_scrape: true,
         startTime: Date.now(),
         zeroDataRetention,
         apiKeyId: options.apiKeyId,
