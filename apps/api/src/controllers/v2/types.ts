@@ -711,6 +711,36 @@ export const extractRequestSchema = extractOptions;
 export type ExtractRequest = z.infer<typeof extractRequestSchema>;
 export type ExtractRequestInput = z.input<typeof extractRequestSchema>;
 
+const BLACKLISTED_WEBHOOK_HEADERS = ["x-firecrawl-signature"];
+
+const agentWebhookSchema = z.preprocess(
+  x => (typeof x === "string" ? { url: x } : x),
+  z
+    .strictObject({
+      url: z.url(),
+      headers: z.record(z.string(), z.string()).prefault({}),
+      metadata: z.record(z.string(), z.string()).prefault({}),
+      events: z
+        .array(
+          z.enum(["started", "action", "completed", "failed", "cancelled"]),
+        )
+        .prefault(["completed", "failed"]),
+    })
+    .refine(
+      obj => {
+        const blacklistedLower = BLACKLISTED_WEBHOOK_HEADERS.map(h =>
+          h.toLowerCase(),
+        );
+        return !Object.keys(obj.headers).some(key =>
+          blacklistedLower.includes(key.toLowerCase()),
+        );
+      },
+      `The following headers are not allowed: ${BLACKLISTED_WEBHOOK_HEADERS.join(", ")}`,
+    ),
+);
+
+type AgentWebhook = z.infer<typeof agentWebhookSchema>;
+
 export const agentRequestSchema = z.strictObject({
   urls: URL.array().optional(),
   prompt: z.string().max(10000),
@@ -738,6 +768,7 @@ export const agentRequestSchema = z.strictObject({
   integration: integrationSchema.optional().transform(val => val || null),
   maxCredits: z.number().optional(),
   strictConstrainToURLs: z.boolean().optional(),
+  webhook: agentWebhookSchema.optional(),
 
   overrideWhitelist: z.string().optional(),
 });
