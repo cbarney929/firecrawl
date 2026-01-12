@@ -21,16 +21,15 @@ let nuqRabbitMQContainer: {
 let fdbContainer: {
   containerName: string;
   containerRuntime: string;
-  clusterFilePath: string;
+} | null = null;
+let fdbQueueServiceContainer: {
+  containerName: string;
+  containerRuntime: string;
 } | null = null;
 
-// Get the monorepo root
-// When running from tsx (src/harness.ts): __dirname is apps/api/src, go up 3 levels
-// When running from node (dist/src/harness.js): __dirname is apps/api/dist/src, go up 4 levels
-const isDistBuild = __dirname.includes("dist");
-const MONOREPO_ROOT = isDistBuild
-  ? join(__dirname, "..", "..", "..", "..")  // dist/src -> dist -> api -> apps -> root
-  : join(__dirname, "..", "..", "..");       // src -> api -> apps -> root
+// Get the monorepo root (apps/api/dist/src -> ../../../..)
+// __dirname is available in CommonJS (which this compiles to)
+const MONOREPO_ROOT = join(__dirname, "..", "..", "..", "..");
 const NUQ_POSTGRES_PATH = join(MONOREPO_ROOT, "apps", "nuq-postgres");
 
 interface ProcessResult {
@@ -57,7 +56,6 @@ interface Services {
   fdb?: {
     containerName: string;
     containerRuntime: string;
-    clusterFilePath: string;
   };
 }
 
@@ -462,83 +460,6 @@ async function buildNuqPostgresImage(runtime: string): Promise<void> {
   logger.success("nuq-postgres image built");
 }
 
-// API Docker image name
-const API_IMAGE_NAME = "firecrawl-api:latest";
-let apiImageBuilt = false;
-
-async function buildApiImage(runtime: string): Promise<void> {
-  if (apiImageBuilt) return;
-
-  logger.info("Building firecrawl-api Docker image (this may take a while)...");
-  // Build from apps/api directory (where pnpm-lock.yaml and sharedLibs are located)
-  const build = execForward(
-    `${runtime}@build-api`,
-    `${runtime} build -t ${API_IMAGE_NAME} ${MONOREPO_ROOT}/apps/api`,
-  );
-  await build.promise;
-  apiImageBuilt = true;
-  logger.success("firecrawl-api image built");
-}
-
-// Track worker containers for cleanup
-const workerContainers: Array<{ name: string; runtime: string }> = [];
-
-// Convert localhost URLs to host.docker.internal for Docker containers on Mac
-function dockerizeUrl(url: string | undefined): string {
-  if (!url) return "";
-  // Replace localhost and 127.0.0.1 with host.docker.internal
-  return url
-    .replace(/localhost/g, "host.docker.internal")
-    .replace(/127\.0\.0\.1/g, "host.docker.internal");
-}
-
-function execDockerWorker(
-  runtime: string,
-  name: string,
-  nodeCommand: string,
-  env: Record<string, string> = {},
-): ProcessResult {
-  const containerName = `firecrawl-${name}`;
-
-  // Build environment flags (dockerize any URLs in env)
-  const envFlags = Object.entries(env)
-    .filter(([_, v]) => v !== undefined)
-    .map(([k, v]) => `-e ${k}=${shellEscape(v)}`)
-    .join(" ");
-
-  // Build the docker run command
-  // Mount the FDB cluster file if it exists
-  const fdbMount = fdbContainer?.clusterFilePath
-    ? `-v ${shellEscape(fdbContainer.clusterFilePath)}:/var/fdb/fdb.cluster:ro`
-    : "";
-
-  // Environment for FDB - use host.docker.internal for the cluster file
-  const fdbEnv = fdbContainer?.clusterFilePath
-    ? "-e FDB_CLUSTER_FILE=/var/fdb/fdb.cluster"
-    : "";
-
-  // Core environment variables - convert localhost to host.docker.internal
-  const coreEnv = [
-    `-e NUQ_DATABASE_URL=${shellEscape(dockerizeUrl(config.NUQ_DATABASE_URL))}`,
-    `-e NUQ_DATABASE_URL_LISTEN=${shellEscape(dockerizeUrl(config.NUQ_DATABASE_URL_LISTEN))}`,
-    `-e NUQ_RABBITMQ_URL=${shellEscape(dockerizeUrl(config.NUQ_RABBITMQ_URL))}`,
-    `-e REDIS_URL=${shellEscape(dockerizeUrl(config.REDIS_URL) || "redis://host.docker.internal:6379")}`,
-    `-e REDIS_RATE_LIMIT_URL=${shellEscape(dockerizeUrl(config.REDIS_RATE_LIMIT_URL) || "redis://host.docker.internal:6379")}`,
-  ].join(" ");
-
-  // Expose port if specified (for API)
-  const portFlag = env.PORT ? `-p ${env.PORT}:${env.PORT}` : "";
-
-  // Force-remove any existing container with this name (from previous interrupted runs)
-  // Then start the new container
-  const command = `${runtime} rm -f ${containerName} 2>/dev/null; ${runtime} run --rm --name ${containerName} ${portFlag} ${fdbMount} ${fdbEnv} ${coreEnv} ${envFlags} ${API_IMAGE_NAME} node ${nodeCommand}`;
-
-  // Track container for cleanup
-  workerContainers.push({ name: containerName, runtime });
-
-  return execForward(name, command);
-}
-
 async function startNuqPostgresContainer(
   runtime: string,
   containerName: string,
@@ -758,114 +679,10 @@ async function setupNuqRabbitMQ(): Promise<Services["nuqRabbitMQ"]> {
   return containerInfo;
 }
 
-async function startFDBContainer(
-  runtime: string,
-  containerName: string,
-): Promise<void> {
-  logger.info(`Starting FoundationDB container: ${containerName}`);
-  const start = execForward(
-    `${runtime}@start`,
-    `${runtime} run -d --name ${containerName} -p 4500:4500 foundationdb/foundationdb:7.3.69`,
-  );
-  await start.promise;
-  logger.success(`FoundationDB container started: ${containerName}`);
-}
-
-async function initializeFDBCluster(
-  runtime: string,
-  containerName: string,
-): Promise<void> {
-  logger.info("Initializing FoundationDB single-node cluster...");
-
-  // Configure as a new single-node memory cluster
-  // This is required for a fresh FDB container
-  try {
-    const init = execForward(
-      `fdb@init`,
-      `${runtime} exec ${containerName} fdbcli --exec "configure new single memory" -C /var/fdb/fdb.cluster`,
-    );
-    await init.promise;
-    logger.success("FoundationDB cluster initialized");
-  } catch (e) {
-    // May fail if already configured, that's OK
-    logger.info("FDB cluster may already be configured, continuing...");
-  }
-}
-
-async function waitForFDB(
-  runtime: string,
-  containerName: string,
-  clusterFilePath: string,
-  timeoutMs: number = config.HARNESS_STARTUP_TIMEOUT_MS,
-): Promise<void> {
-  logger.info("Waiting for FoundationDB to be ready...");
-  const start = Date.now();
-
-  // First, try to initialize the cluster (needed for fresh containers)
-  await initializeFDBCluster(runtime, containerName);
-
-  // Give FDB a moment to apply the configuration
-  await new Promise(resolve => setTimeout(resolve, 1000));
-
-  let lastStatus = "";
-  while (Date.now() - start < timeoutMs) {
-    try {
-      // Check if the database is actually available (not just the process)
-      const result = await new Promise<string>((resolve, reject) => {
-        const child = require("child_process").spawn(
-          runtime,
-          ["exec", containerName, "fdbcli", "--exec", "status minimal", "-C", "/var/fdb/fdb.cluster"],
-          { stdio: ["inherit", "pipe", "pipe"] },
-        );
-        let stdout = "";
-        let stderr = "";
-        child.stdout.on("data", (data: Buffer) => {
-          stdout += data.toString();
-        });
-        child.stderr.on("data", (data: Buffer) => {
-          stderr += data.toString();
-        });
-        child.on("close", (code: number) => {
-          if (code === 0) {
-            resolve(stdout);
-          } else {
-            reject(new Error(`fdbcli exited with code ${code}: ${stderr}`));
-          }
-        });
-      });
-
-      // Log status changes
-      const status = result.trim();
-      if (status !== lastStatus) {
-        logger.info(`FDB status: ${status}`);
-        lastStatus = status;
-      }
-
-      // Check if the database is actually available
-      if (result.includes("The database is available")) {
-        logger.success("FoundationDB is ready and available");
-        return;
-      }
-
-      // Database not ready yet
-      await new Promise(resolve => setTimeout(resolve, 1000));
-    } catch (e: any) {
-      // Log the error occasionally
-      if (Date.now() - start > 5000) {
-        logger.warn(`FDB check error: ${e.message}`);
-      }
-      // Not ready yet, wait and retry
-      await new Promise(resolve => setTimeout(resolve, 1000));
-    }
-  }
-
-  throw new Error(`FoundationDB did not become ready within ${timeoutMs}ms. Last status: ${lastStatus}`);
-}
-
 async function setupFDB(): Promise<Services["fdb"]> {
-  // If FDB_CLUSTER_FILE is already set, respect it (user's explicit choice)
-  if (config.FDB_CLUSTER_FILE) {
-    logger.info("FDB_CLUSTER_FILE is set, skipping container management");
+  // If FDB_QUEUE_SERVICE_URL is already set, respect it (user's explicit choice)
+  if (config.FDB_QUEUE_SERVICE_URL) {
+    logger.info("FDB_QUEUE_SERVICE_URL is set, skipping container management");
     return undefined;
   }
 
@@ -873,93 +690,188 @@ async function setupFDB(): Promise<Services["fdb"]> {
   const isDockerCompose = POSTGRES_HOST !== "localhost";
 
   if (isDockerCompose) {
-    // Running in docker-compose: FDB should be configured externally
-    logger.info(
-      "Running in docker-compose, skipping FDB container management",
-    );
+    logger.info("Running in docker-compose, skipping FDB container management");
     return undefined;
   }
 
-  // Running locally: manage container
-  logger.section("Setting up FoundationDB container");
+  // Running locally: manage containers
+  logger.section("Setting up FoundationDB and FDB Queue Service containers");
 
   const runtime = await detectContainerRuntime();
   if (!runtime) {
     throw new Error(
-      "Neither Docker nor Podman found. Please install Docker/Podman or set FDB_CLUSTER_FILE manually.",
+      "Neither Docker nor Podman found. Please install Docker/Podman or set FDB_QUEUE_SERVICE_URL manually.",
     );
   }
 
   logger.success(`Using container runtime: ${runtime}`);
 
-  const containerName = "firecrawl-fdb";
+  const fdbContainerName = "firecrawl-fdb";
+  const fdbQueueServiceContainerName = "firecrawl-fdb-queue-service";
 
-  // Stop and remove any existing container
-  await stopAndRemoveContainer(runtime, containerName);
+  // Stop and remove any existing containers
+  await stopAndRemoveContainer(runtime, fdbContainerName);
+  await stopAndRemoveContainer(runtime, fdbQueueServiceContainerName);
 
-  // Start the container (using stock image, no build needed)
-  await startFDBContainer(runtime, containerName);
+  // Start the FDB container
+  logger.info(`Starting FoundationDB container: ${fdbContainerName}`);
+  const startFdb = execForward(
+    `${runtime}@start-fdb`,
+    `${runtime} run -d --name ${fdbContainerName} -p 4500:4500 foundationdb/foundationdb:7.3.69`,
+  );
+  await startFdb.promise;
+  logger.success(`FoundationDB container started`);
 
-  // Create a temporary cluster file
+  // Wait for FDB container to initialize, then configure the cluster
+  await new Promise(resolve => setTimeout(resolve, 2000));
+
+  // Initialize the FDB cluster
+  logger.info("Initializing FoundationDB cluster...");
+  try {
+    const init = execForward(
+      `fdb@init`,
+      `${runtime} exec ${fdbContainerName} fdbcli --exec "configure new single memory" -C /var/fdb/fdb.cluster`,
+    );
+    await init.promise;
+    logger.success("FoundationDB cluster initialized");
+  } catch {
+    logger.info("FDB cluster may already be configured, continuing...");
+  }
+
+  // Wait for FDB to be available
+  logger.info("Waiting for FoundationDB to be ready...");
+  const fdbStart = Date.now();
+  while (Date.now() - fdbStart < config.HARNESS_STARTUP_TIMEOUT_MS) {
+    try {
+      const result = await new Promise<string>((resolve, reject) => {
+        const child = require("child_process").spawn(
+          runtime,
+          [
+            "exec",
+            fdbContainerName,
+            "fdbcli",
+            "--exec",
+            "status minimal",
+            "-C",
+            "/var/fdb/fdb.cluster",
+          ],
+          { stdio: ["inherit", "pipe", "pipe"] },
+        );
+        let stdout = "";
+        child.stdout.on("data", (data: Buffer) => {
+          stdout += data.toString();
+        });
+        child.on("close", (code: number) =>
+          code === 0 ? resolve(stdout) : reject(new Error(`exit ${code}`)),
+        );
+      });
+      if (result.includes("The database is available")) {
+        logger.success("FoundationDB is ready");
+        break;
+      }
+    } catch {
+      // Not ready yet
+    }
+    await new Promise(resolve => setTimeout(resolve, 1000));
+  }
+
+  // Get cluster file and write it for the FDB Queue Service
   const fs = await import("fs");
   const os = await import("os");
   const path = await import("path");
-
   const clusterFilePath = path.join(os.tmpdir(), "firecrawl-fdb.cluster");
 
-  // Get the cluster file from the container and modify it for localhost access
-  // First, wait for the container to initialize its cluster file
-  await new Promise(resolve => setTimeout(resolve, 2000));
-
-  // Get the cluster file content from inside the container
-  const result = await new Promise<string>((resolve, reject) => {
+  const clusterFileContent = await new Promise<string>((resolve, reject) => {
     const child = require("child_process").spawn(
       runtime,
-      ["exec", containerName, "cat", "/var/fdb/fdb.cluster"],
+      ["exec", fdbContainerName, "cat", "/var/fdb/fdb.cluster"],
       { stdio: ["inherit", "pipe", "pipe"] },
     );
     let stdout = "";
     child.stdout.on("data", (data: Buffer) => {
       stdout += data.toString();
     });
-    child.on("close", (code: number) => {
-      if (code === 0) {
-        resolve(stdout.trim());
-      } else {
-        reject(new Error(`Failed to get cluster file, exit code ${code}`));
-      }
-    });
+    child.on("close", (code: number) =>
+      code === 0 ? resolve(stdout.trim()) : reject(new Error(`exit ${code}`)),
+    );
   });
 
-  // The cluster file format is: "description:id@IP:port"
-  // Example: "docker:docker@172.17.0.4:4500"
-  // We need to replace the container's internal IP with host.docker.internal
-  // so Docker containers can reach the FDB container via the host
-  // (Port 4500 is exposed to localhost via -p 4500:4500)
-  const clusterFileContent = result.replace(/@[\d.]+:4500/, "@host.docker.internal:4500");
-  logger.info(`Original cluster file: ${result}`);
-  logger.info(`Rewritten cluster file: ${clusterFileContent}`);
-
-  fs.writeFileSync(clusterFilePath, clusterFileContent + "\n");
+  // Rewrite for Docker networking
+  const rewrittenClusterFile = clusterFileContent.replace(
+    /@[\d.]+:4500/,
+    "@host.docker.internal:4500",
+  );
+  fs.writeFileSync(clusterFilePath, rewrittenClusterFile + "\n");
   logger.info(`Cluster file written to ${clusterFilePath}`);
 
-  // Wait for FDB to be ready
-  await waitForFDB(runtime, containerName, clusterFilePath);
+  // Build and start the FDB Queue Service
+  const fdbQueueServicePath = join(MONOREPO_ROOT, "apps", "fdb-queue-service");
+  const fdbQueueServiceImageName = "firecrawl-fdb-queue-service:latest";
+  const fdbQueueServicePort = 3100;
+
+  if (fs.existsSync(join(fdbQueueServicePath, "Cargo.toml"))) {
+    logger.info("Building FDB Queue Service image...");
+    const build = execForward(
+      `fdb@build-service`,
+      `${runtime} build -t ${fdbQueueServiceImageName} ${shellEscape(fdbQueueServicePath)}`,
+    );
+    await build.promise;
+    logger.success("FDB Queue Service image built");
+  }
+
+  logger.info(
+    `Starting FDB Queue Service container: ${fdbQueueServiceContainerName}`,
+  );
+  const startService = execForward(
+    `${runtime}@start-fdb-queue-service`,
+    `${runtime} run -d --name ${fdbQueueServiceContainerName} -p ${fdbQueueServicePort}:${fdbQueueServicePort} -v ${shellEscape(clusterFilePath)}:/etc/foundationdb/fdb.cluster:ro -e FDB_CLUSTER_FILE=/etc/foundationdb/fdb.cluster -e PORT=${fdbQueueServicePort} ${fdbQueueServiceImageName}`,
+  );
+  await startService.promise;
+
+  // Wait for the FDB Queue Service to be ready
+  logger.info("Waiting for FDB Queue Service to be ready...");
+  for (let i = 0; i < 30; i++) {
+    try {
+      const response = await fetch(
+        `http://localhost:${fdbQueueServicePort}/health`,
+      );
+      if (response.ok) {
+        const health = (await response.json()) as {
+          status: string;
+          fdbConnected: boolean;
+        };
+        if (health.fdbConnected) {
+          logger.success("FDB Queue Service is ready");
+          break;
+        }
+      }
+    } catch {
+      // Not ready yet
+    }
+    if (i === 29) {
+      throw new Error("FDB Queue Service did not become ready in time");
+    }
+    await new Promise(resolve => setTimeout(resolve, 1000));
+  }
 
   // Set environment variable
-  config.FDB_CLUSTER_FILE = clusterFilePath;
-  process.env.FDB_CLUSTER_FILE = clusterFilePath;
+  const serviceUrl = `http://localhost:${fdbQueueServicePort}`;
+  config.FDB_QUEUE_SERVICE_URL = serviceUrl;
+  process.env.FDB_QUEUE_SERVICE_URL = serviceUrl;
 
-  logger.success("FoundationDB container is ready");
+  logger.success("FDB Queue Service is ready");
 
   const containerInfo = {
-    containerName,
+    containerName: fdbContainerName,
     containerRuntime: runtime,
-    clusterFilePath,
   };
 
   // Store globally for graceful shutdown
   fdbContainer = containerInfo;
+  fdbQueueServiceContainer = {
+    containerName: fdbQueueServiceContainerName,
+    containerRuntime: runtime,
+  };
 
   return containerInfo;
 }
@@ -1013,53 +925,27 @@ async function startServices(command?: string[]): Promise<Services> {
   // Setup NUQ RabbitMQ container if needed
   const nuqRabbitMQ = await setupNuqRabbitMQ();
 
-  // Setup FoundationDB container if needed
+  // Setup FDB containers if needed
   const fdb = await setupFDB();
 
   logger.section("Starting services");
 
-  // Determine if we should use Docker for all services
-  // Use Docker when FDB is configured (API + workers all need FDB client library)
-  const useDocker = fdb !== undefined && process.argv[2] !== "--start-docker";
-  const containerRuntime = fdb?.containerRuntime || await detectContainerRuntime();
-
-  if (useDocker && containerRuntime) {
-    logger.info("Using Docker containers for all services (FDB client required)");
-    await buildApiImage(containerRuntime);
-  }
-
-  // Helper to spawn a service (either in Docker or locally)
-  const spawnService = (
-    name: string,
-    nodeCmd: string,
-    pnpmCmd: string,
-    env: Record<string, string>,
-  ): ProcessResult => {
-    if (useDocker && containerRuntime) {
-      return execDockerWorker(containerRuntime, name, nodeCmd, env);
-    } else if (process.argv[2] === "--start-docker") {
-      return execForward(name, `node ${nodeCmd}`, env);
-    } else {
-      return execForward(name, pnpmCmd, env);
-    }
-  };
-
-  const api = spawnService(
+  const api = execForward(
     "api",
-    "dist/src/index.js",
-    "pnpm server:production:nobuild",
+    process.argv[2] === "--start-docker"
+      ? "node dist/src/index.js"
+      : "pnpm server:production:nobuild",
     {
       NUQ_REDUCE_NOISE: "true",
       NUQ_POD_NAME: "api",
-      PORT: String(PORT),
-      HOST: "0.0.0.0", // Bind to all interfaces so Docker port mapping works
     },
   );
 
-  const worker = spawnService(
+  const worker = execForward(
     "worker",
-    "dist/src/services/queue-worker.js",
-    "pnpm worker:production",
+    process.argv[2] === "--start-docker"
+      ? "node dist/src/services/queue-worker.js"
+      : "pnpm worker:production",
     {
       NUQ_REDUCE_NOISE: "true",
       NUQ_POD_NAME: "worker",
@@ -1067,10 +953,11 @@ async function startServices(command?: string[]): Promise<Services> {
     },
   );
 
-  const extractWorker = spawnService(
+  const extractWorker = execForward(
     "extract-worker",
-    "dist/src/services/extract-worker.js",
-    "pnpm extract-worker:production",
+    process.argv[2] === "--start-docker"
+      ? "node dist/src/services/extract-worker.js"
+      : "pnpm extract-worker:production",
     {
       NUQ_REDUCE_NOISE: "true",
       NUQ_POD_NAME: "extract-worker",
@@ -1079,10 +966,11 @@ async function startServices(command?: string[]): Promise<Services> {
   );
 
   const nuqWorkers = Array.from({ length: NUQ_WORKER_COUNT }, (_, i) =>
-    spawnService(
+    execForward(
       `nuq-worker-${i}`,
-      "dist/src/services/worker/nuq-worker.js",
-      "pnpm nuq-worker:production",
+      process.argv[2] === "--start-docker"
+        ? "node dist/src/services/worker/nuq-worker.js"
+        : "pnpm nuq-worker:production",
       {
         NUQ_WORKER_PORT: String(NUQ_WORKER_START_PORT + i),
         NUQ_REDUCE_NOISE: "true",
@@ -1091,10 +979,11 @@ async function startServices(command?: string[]): Promise<Services> {
     ),
   );
 
-  const nuqPrefetchWorker = spawnService(
+  const nuqPrefetchWorker = execForward(
     "nuq-prefetch-worker",
-    "dist/src/services/worker/nuq-prefetch-worker.js",
-    "pnpm nuq-prefetch-worker:production",
+    process.argv[2] === "--start-docker"
+      ? "node dist/src/services/worker/nuq-prefetch-worker.js"
+      : "pnpm nuq-prefetch-worker:production",
     {
       NUQ_PREFETCH_WORKER_PORT: String(NUQ_PREFETCH_WORKER_PORT),
       NUQ_REDUCE_NOISE: "true",
@@ -1104,10 +993,11 @@ async function startServices(command?: string[]): Promise<Services> {
   );
 
   const indexWorker = config.USE_DB_AUTHENTICATION
-    ? spawnService(
+    ? execForward(
         "index-worker",
-        "dist/src/services/indexing/index-worker.js",
-        "pnpm index-worker:production",
+        process.argv[2] === "--start-docker"
+          ? "node dist/src/services/indexing/index-worker.js"
+          : "pnpm index-worker:production",
         {
           NUQ_REDUCE_NOISE: "true",
           NUQ_POD_NAME: "index-worker",
@@ -1186,34 +1076,23 @@ async function stopDevelopmentServices(services: Services) {
     logger.success("NUQ RabbitMQ container stopped");
   }
 
-  // Stop and remove FDB container if it was started by harness
+  // Stop and remove FDB containers if they were started by harness
   if (services.fdb) {
+    if (fdbQueueServiceContainer) {
+      logger.info("Stopping FDB Queue Service container");
+      await stopAndRemoveContainer(
+        fdbQueueServiceContainer.containerRuntime,
+        fdbQueueServiceContainer.containerName,
+      );
+      logger.success("FDB Queue Service container stopped");
+    }
     logger.info("Stopping FoundationDB container");
     await stopAndRemoveContainer(
       services.fdb.containerRuntime,
       services.fdb.containerName,
     );
-    // Clean up cluster file
-    try {
-      const fs = await import("fs");
-      if (fs.existsSync(services.fdb.clusterFilePath)) {
-        fs.unlinkSync(services.fdb.clusterFilePath);
-      }
-    } catch (e) {
-      // Ignore cleanup errors
-    }
     logger.success("FoundationDB container stopped");
   }
-
-  // Stop and remove any worker containers
-  for (const container of workerContainers) {
-    try {
-      await stopAndRemoveContainer(container.runtime, container.name);
-    } catch (e) {
-      // Ignore cleanup errors
-    }
-  }
-  workerContainers.length = 0;
 }
 
 async function runDevMode(): Promise<void> {
@@ -1388,38 +1267,25 @@ async function gracefulShutdown() {
     nuqRabbitMQContainer = null;
   }
 
-  // Stop and remove FDB container if it was started by harness
+  // Stop and remove FDB containers if they were started by harness
+  if (fdbQueueServiceContainer) {
+    logger.info("Stopping FDB Queue Service container");
+    await stopAndRemoveContainer(
+      fdbQueueServiceContainer.containerRuntime,
+      fdbQueueServiceContainer.containerName,
+    );
+    logger.success("FDB Queue Service container stopped");
+    fdbQueueServiceContainer = null;
+  }
+
   if (fdbContainer) {
     logger.info("Stopping FoundationDB container");
     await stopAndRemoveContainer(
       fdbContainer.containerRuntime,
       fdbContainer.containerName,
     );
-    // Clean up cluster file
-    try {
-      const fs = await import("fs");
-      if (fs.existsSync(fdbContainer.clusterFilePath)) {
-        fs.unlinkSync(fdbContainer.clusterFilePath);
-      }
-    } catch (e) {
-      // Ignore cleanup errors
-    }
     logger.success("FoundationDB container stopped");
     fdbContainer = null;
-  }
-
-  // Stop and remove any worker containers
-  if (workerContainers.length > 0) {
-    logger.info("Stopping worker containers");
-    for (const container of workerContainers) {
-      try {
-        await stopAndRemoveContainer(container.runtime, container.name);
-      } catch (e) {
-        // Ignore cleanup errors
-      }
-    }
-    workerContainers.length = 0;
-    logger.success("Worker containers stopped");
   }
 
   logger.success("All processes terminated");

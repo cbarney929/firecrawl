@@ -27,20 +27,6 @@ RUN apt-get update && apt-get install -y \
     python3 \
     && rm -rf /var/lib/apt/lists/*
 
-# Install FoundationDB client library in build stage so native addon can compile
-# The foundationdb npm package needs libfdb_c.so to build its native Node.js binding
-RUN ARCH=$(dpkg --print-architecture) && \
-    if [ "$ARCH" = "amd64" ]; then \
-      FDB_ARCH="amd64"; \
-    elif [ "$ARCH" = "arm64" ]; then \
-      FDB_ARCH="aarch64"; \
-    else \
-      echo "Unsupported architecture: $ARCH" && exit 1; \
-    fi && \
-    curl -fsSL "https://github.com/apple/foundationdb/releases/download/7.3.69/foundationdb-clients_7.3.69-1_${FDB_ARCH}.deb" -o /tmp/fdb-clients.deb && \
-    dpkg -i /tmp/fdb-clients.deb && \
-    rm /tmp/fdb-clients.deb
-
 # Install Rust
 ENV RUSTUP_HOME=/usr/local/rustup \
     CARGO_HOME=/usr/local/cargo \
@@ -59,10 +45,6 @@ RUN --mount=type=cache,id=pnpm,target=/pnpm/store \
     --mount=type=cache,target=/app/native/target \
     pnpm install --frozen-lockfile
 
-# Rebuild foundationdb native addon (prebuilds may not exist for this platform)
-# This compiles the native binding against the installed FDB client library
-RUN pnpm rebuild foundationdb
-
 # Build the application
 RUN pnpm run build
 
@@ -72,28 +54,12 @@ RUN pnpm prune --prod --ignore-scripts
 # Runtime stage
 FROM base AS runtime
 
-# Install runtime dependencies and FoundationDB client
+# Install runtime dependencies
 RUN apt-get update && apt-get install -y \
     git \
     procps \
     curl \
     && rm -rf /var/lib/apt/lists/*
-
-# Install FoundationDB client library (7.3.x for ARM64/AMD64)
-RUN ARCH=$(dpkg --print-architecture) && \
-    if [ "$ARCH" = "amd64" ]; then \
-      FDB_ARCH="amd64"; \
-    elif [ "$ARCH" = "arm64" ]; then \
-      FDB_ARCH="aarch64"; \
-    else \
-      echo "Unsupported architecture: $ARCH" && exit 1; \
-    fi && \
-    curl -fsSL "https://github.com/apple/foundationdb/releases/download/7.3.69/foundationdb-clients_7.3.69-1_${FDB_ARCH}.deb" -o /tmp/fdb-clients.deb && \
-    dpkg -i /tmp/fdb-clients.deb && \
-    rm /tmp/fdb-clients.deb
-
-# Set library path for FDB
-ENV LD_LIBRARY_PATH=/usr/lib
 
 EXPOSE 8080
 WORKDIR /app

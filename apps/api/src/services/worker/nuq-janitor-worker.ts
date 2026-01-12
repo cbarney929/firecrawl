@@ -15,7 +15,7 @@ import {
   reconcileTeamActiveCounter,
   reconcileCrawlActiveCounter,
   cleanStaleCounters,
-} from "../fdb-queue";
+} from "../fdb-queue-client";
 
 const logger = rootLogger.child({ module: "nuq-janitor-worker" });
 
@@ -28,8 +28,14 @@ const RECONCILIATION_BATCH_SIZE = 20;
 
 // Horizontal scaling configuration
 // When multiple janitor workers run, they partition work by crawl ID hash
-const TOTAL_PARTITIONS = parseInt(process.env.NUQ_JANITOR_TOTAL_PARTITIONS || "1", 10);
-const WORKER_PARTITION = parseInt(process.env.NUQ_JANITOR_WORKER_PARTITION || "0", 10);
+const TOTAL_PARTITIONS = parseInt(
+  process.env.NUQ_JANITOR_TOTAL_PARTITIONS || "1",
+  10,
+);
+const WORKER_PARTITION = parseInt(
+  process.env.NUQ_JANITOR_WORKER_PARTITION || "0",
+  10,
+);
 
 /**
  * Hash a string to a partition number (0 to TOTAL_PARTITIONS-1).
@@ -57,8 +63,8 @@ const nuqPool = new Pool({
   max: 5,
 });
 
-nuqPool.on("error", (err) =>
-  logger.error("Error in nuq-janitor-worker pool", { error: err })
+nuqPool.on("error", err =>
+  logger.error("Error in nuq-janitor-worker pool", { error: err }),
 );
 
 let isRunning = false;
@@ -112,9 +118,10 @@ async function checkAndMarkFinishedCrawls(): Promise<void> {
 
     // Filter candidates by partition for horizontal scaling
     const allCandidates = candidateResult.rows;
-    const candidates = TOTAL_PARTITIONS > 1
-      ? allCandidates.filter(c => shouldHandleId(c.id))
-      : allCandidates;
+    const candidates =
+      TOTAL_PARTITIONS > 1
+        ? allCandidates.filter(c => shouldHandleId(c.id))
+        : allCandidates;
 
     skippedByPartition = allCandidates.length - candidates.length;
     processedCount = candidates.length;
@@ -161,7 +168,7 @@ async function checkAndMarkFinishedCrawls(): Promise<void> {
               WHERE id = $1 AND status = 'active'::nuq.group_status
               RETURNING id
               `,
-              [candidate.id, candidate.ttl]
+              [candidate.id, candidate.ttl],
             );
 
             if (updateResult.rowCount && updateResult.rowCount > 0) {
@@ -171,15 +178,20 @@ async function checkAndMarkFinishedCrawls(): Promise<void> {
                 INSERT INTO nuq.queue_crawl_finished (id, data, owner_id, group_id)
                 VALUES ($1, '{}'::jsonb, $2, $3)
                 `,
-                [uuidv7(), candidate.owner_id, candidate.id]
+                [uuidv7(), candidate.owner_id, candidate.id],
               );
 
               markedFinishedCount++;
-              logger.info("Crawl marked as finished", { crawlId: candidate.id });
-            } else {
-              logger.debug("Crawl already marked as finished by another worker", {
+              logger.info("Crawl marked as finished", {
                 crawlId: candidate.id,
               });
+            } else {
+              logger.debug(
+                "Crawl already marked as finished by another worker",
+                {
+                  crawlId: candidate.id,
+                },
+              );
             }
 
             await client.query("COMMIT");
@@ -258,13 +270,19 @@ async function runCounterReconciliation(): Promise<void> {
   try {
     // Reconcile team queue counters
     // Fetch more than batch size to account for partition filtering
-    const fetchSize = TOTAL_PARTITIONS > 1 ? RECONCILIATION_BATCH_SIZE * TOTAL_PARTITIONS : RECONCILIATION_BATCH_SIZE;
+    const fetchSize =
+      TOTAL_PARTITIONS > 1
+        ? RECONCILIATION_BATCH_SIZE * TOTAL_PARTITIONS
+        : RECONCILIATION_BATCH_SIZE;
     const allTeamIds = await sampleTeamCounters(fetchSize, lastTeamId);
 
     // Filter by partition for horizontal scaling
-    const teamIds = TOTAL_PARTITIONS > 1
-      ? allTeamIds.filter(id => shouldHandleId(id)).slice(0, RECONCILIATION_BATCH_SIZE)
-      : allTeamIds;
+    const teamIds =
+      TOTAL_PARTITIONS > 1
+        ? allTeamIds
+            .filter(id => shouldHandleId(id))
+            .slice(0, RECONCILIATION_BATCH_SIZE)
+        : allTeamIds;
 
     skippedByPartition += allTeamIds.length - teamIds.length;
 
@@ -276,7 +294,8 @@ async function runCounterReconciliation(): Promise<void> {
 
           if (queueCorrection !== 0 || activeCorrection !== 0) {
             teamsReconciled++;
-            totalCorrections += Math.abs(queueCorrection) + Math.abs(activeCorrection);
+            totalCorrections +=
+              Math.abs(queueCorrection) + Math.abs(activeCorrection);
           }
         } catch (error) {
           logger.error("Error reconciling team counters", { teamId, error });
@@ -299,9 +318,12 @@ async function runCounterReconciliation(): Promise<void> {
     const allCrawlIds = await sampleCrawlCounters(fetchSize, lastCrawlId);
 
     // Filter by partition for horizontal scaling
-    const crawlIds = TOTAL_PARTITIONS > 1
-      ? allCrawlIds.filter(id => shouldHandleId(id)).slice(0, RECONCILIATION_BATCH_SIZE)
-      : allCrawlIds;
+    const crawlIds =
+      TOTAL_PARTITIONS > 1
+        ? allCrawlIds
+            .filter(id => shouldHandleId(id))
+            .slice(0, RECONCILIATION_BATCH_SIZE)
+        : allCrawlIds;
 
     skippedByPartition += allCrawlIds.length - crawlIds.length;
 
@@ -313,7 +335,8 @@ async function runCounterReconciliation(): Promise<void> {
 
           if (queueCorrection !== 0 || activeCorrection !== 0) {
             crawlsReconciled++;
-            totalCorrections += Math.abs(queueCorrection) + Math.abs(activeCorrection);
+            totalCorrections +=
+              Math.abs(queueCorrection) + Math.abs(activeCorrection);
           }
         } catch (error) {
           logger.error("Error reconciling crawl counters", { crawlId, error });
@@ -333,10 +356,16 @@ async function runCounterReconciliation(): Promise<void> {
     }
 
     // Periodically clean stale counters (only when cursors have reset and only partition 0 does this)
-    if (lastTeamId === undefined && lastCrawlId === undefined && WORKER_PARTITION === 0) {
+    if (
+      lastTeamId === undefined &&
+      lastCrawlId === undefined &&
+      WORKER_PARTITION === 0
+    ) {
       const staleCleaned = await cleanStaleCounters();
       if (staleCleaned > 0) {
-        logger.info("Cleaned stale counters during reconciliation", { staleCleaned });
+        logger.info("Cleaned stale counters during reconciliation", {
+          staleCleaned,
+        });
       }
     }
 
@@ -384,32 +413,32 @@ export function startNuqJanitorWorker(): void {
   });
 
   // Run immediately on startup
-  checkAndMarkFinishedCrawls().catch((error) => {
+  checkAndMarkFinishedCrawls().catch(error => {
     logger.error("Error in initial crawl finished check", { error });
   });
 
   // Schedule periodic crawl finished checks
   crawlFinishedIntervalHandle = setInterval(() => {
-    checkAndMarkFinishedCrawls().catch((error) => {
+    checkAndMarkFinishedCrawls().catch(error => {
       logger.error("Error in periodic crawl finished check", { error });
     });
   }, CRAWL_FINISHED_CHECK_INTERVAL_MS);
 
   // Schedule periodic FDB cleanup
   cleanupIntervalHandle = setInterval(() => {
-    runFDBCleanup().catch((error) => {
+    runFDBCleanup().catch(error => {
       logger.error("Error in FDB cleanup", { error });
     });
   }, CLEANUP_INTERVAL_MS);
 
   // Schedule periodic counter reconciliation (with a delay to spread out work)
   setTimeout(() => {
-    runCounterReconciliation().catch((error) => {
+    runCounterReconciliation().catch(error => {
       logger.error("Error in initial counter reconciliation", { error });
     });
 
     reconciliationIntervalHandle = setInterval(() => {
-      runCounterReconciliation().catch((error) => {
+      runCounterReconciliation().catch(error => {
         logger.error("Error in periodic counter reconciliation", { error });
       });
     }, COUNTER_RECONCILIATION_INTERVAL_MS);

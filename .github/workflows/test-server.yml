@@ -47,7 +47,7 @@ jobs:
       PROXY_PASSWORD: ${{ matrix.proxy == 'proxy' && secrets.PROXY_PASSWORD || '' }}
       NUQ_DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
       NUQ_RABBITMQ_URL: amqp://localhost:5672
-      FDB_CLUSTER_FILE: /etc/foundationdb/fdb.cluster
+      FDB_QUEUE_SERVICE_URL: http://localhost:3100
       USE_GO_MARKDOWN_PARSER: true
       ALLOW_LOCAL_WEBHOOKS: true
       FIRECRAWL_LOG_TO_FILE: true
@@ -69,20 +69,6 @@ jobs:
             apps/api/pnpm-lock.yaml
             apps/test-site/pnpm-lock.yaml
             apps/playwright-service-ts/pnpm-lock.yaml
-
-      - name: Install FoundationDB client library
-        run: |
-          ARCH=$(dpkg --print-architecture)
-          if [ "$ARCH" = "amd64" ]; then
-            FDB_ARCH="amd64"
-          elif [ "$ARCH" = "arm64" ]; then
-            FDB_ARCH="aarch64"
-          else
-            echo "Unsupported architecture: $ARCH" && exit 1
-          fi
-          curl -fsSL "https://github.com/apple/foundationdb/releases/download/7.3.69/foundationdb-clients_7.3.69-1_${FDB_ARCH}.deb" -o /tmp/fdb-clients.deb
-          sudo dpkg -i /tmp/fdb-clients.deb
-          rm /tmp/fdb-clients.deb
 
       - run: pnpm fetch
         working-directory: apps/api
@@ -226,17 +212,16 @@ jobs:
           # Wait for initialization
           sleep 2
 
-          # Get the cluster file from the container and rewrite it for localhost access
+          # Get the cluster file from the container
           FDB_CLUSTER_CONTENT=$(docker exec foundationdb cat /var/fdb/fdb.cluster)
           echo "Original cluster file: $FDB_CLUSTER_CONTENT"
 
-          # Replace the container IP with 127.0.0.1 for host access
-          FDB_CLUSTER_LOCAL=$(echo "$FDB_CLUSTER_CONTENT" | sed 's/@[0-9.]*:4500/@127.0.0.1:4500/')
-          echo "Rewritten cluster file: $FDB_CLUSTER_LOCAL"
+          # Replace the container IP with host.docker.internal for container-to-container access
+          FDB_CLUSTER_DOCKER=$(echo "$FDB_CLUSTER_CONTENT" | sed 's/@[0-9.]*:4500/@host.docker.internal:4500/')
+          echo "Docker cluster file: $FDB_CLUSTER_DOCKER"
 
-          # Write the cluster file
-          sudo mkdir -p /etc/foundationdb
-          echo "$FDB_CLUSTER_LOCAL" | sudo tee /etc/foundationdb/fdb.cluster
+          # Write the cluster file for the queue service container
+          echo "$FDB_CLUSTER_DOCKER" > /tmp/fdb.cluster
 
           # Wait for FDB to be available (with retries)
           for i in {1..30}; do
@@ -250,6 +235,33 @@ jobs:
 
           # Verify FDB is working
           docker exec foundationdb fdbcli --exec "status" -C /var/fdb/fdb.cluster
+
+      - name: Start FDB Queue Service
+        run: |
+          # Build the FDB queue service image
+          docker build -t firecrawl-fdb-queue-service:latest ./apps/fdb-queue-service
+
+          # Run the queue service container
+          docker run -d --name fdb-queue-service \
+            -p 3100:3100 \
+            --add-host=host.docker.internal:host-gateway \
+            -v /tmp/fdb.cluster:/etc/foundationdb/fdb.cluster:ro \
+            -e FDB_CLUSTER_FILE=/etc/foundationdb/fdb.cluster \
+            -e PORT=3100 \
+            firecrawl-fdb-queue-service:latest
+
+          # Wait for the queue service to be healthy
+          for i in {1..30}; do
+            if curl -s http://localhost:3100/health | grep -q '"fdbConnected":true'; then
+              echo "FDB Queue Service is ready!"
+              break
+            fi
+            echo "Waiting for FDB Queue Service... (attempt $i/30)"
+            sleep 2
+          done
+
+          # Verify service health
+          curl -s http://localhost:3100/health
 
       - name: Run tests
         run: pnpm harness pnpm test:snips
@@ -280,6 +292,10 @@ jobs:
       - name: Copy FoundationDB logs
         if: always()
         run: docker logs foundationdb > logs/foundationdb.log 2>&1 && docker kill foundationdb || true
+
+      - name: Copy FDB Queue Service logs
+        if: always()
+        run: docker logs fdb-queue-service > logs/fdb-queue-service.log 2>&1 && docker kill fdb-queue-service || true
 
       - name: Copy Playwright logs
         if: always() && matrix.engine == 'playwright'
@@ -349,7 +365,7 @@ jobs:
       TEST_SUITE_WEBSITE: ${{ secrets.TEST_SUITE_WEBSITE }}
       NUQ_DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
       NUQ_RABBITMQ_URL: amqp://localhost:5672
-      FDB_CLUSTER_FILE: /etc/foundationdb/fdb.cluster
+      FDB_QUEUE_SERVICE_URL: http://localhost:3100
       HOST: 0.0.0.0
     steps:
       - uses: actions/checkout@v5
@@ -376,21 +392,6 @@ jobs:
           cache-dependency-path: |
             apps/api/pnpm-lock.yaml
       
-      - name: Install FoundationDB client library
-        run: |
-          ARCH=$(dpkg --print-architecture)
-          if [ "$ARCH" = "amd64" ]; then
-            FDB_ARCH="amd64"
-          elif [ "$ARCH" = "arm64" ]; then
-            FDB_ARCH="aarch64"
-          else
-            echo "Unsupported architecture: $ARCH" && exit 1
-          fi
-          curl -fsSL "https://github.com/apple/foundationdb/releases/download/7.3.69/foundationdb-clients_7.3.69-1_${FDB_ARCH}.deb" -o /tmp/fdb-clients.deb
-          sudo dpkg -i /tmp/fdb-clients.deb
-          rm /tmp/fdb-clients.deb
-
-
       - run: pnpm fetch
         working-directory: apps/api
 
@@ -471,17 +472,16 @@ jobs:
           # Wait for initialization
           sleep 2
 
-          # Get the cluster file from the container and rewrite it for localhost access
+          # Get the cluster file from the container
           FDB_CLUSTER_CONTENT=$(docker exec foundationdb cat /var/fdb/fdb.cluster)
           echo "Original cluster file: $FDB_CLUSTER_CONTENT"
 
-          # Replace the container IP with 127.0.0.1 for host access
-          FDB_CLUSTER_LOCAL=$(echo "$FDB_CLUSTER_CONTENT" | sed 's/@[0-9.]*:4500/@127.0.0.1:4500/')
-          echo "Rewritten cluster file: $FDB_CLUSTER_LOCAL"
+          # Replace the container IP with host.docker.internal for container-to-container access
+          FDB_CLUSTER_DOCKER=$(echo "$FDB_CLUSTER_CONTENT" | sed 's/@[0-9.]*:4500/@host.docker.internal:4500/')
+          echo "Docker cluster file: $FDB_CLUSTER_DOCKER"
 
-          # Write the cluster file
-          sudo mkdir -p /etc/foundationdb
-          echo "$FDB_CLUSTER_LOCAL" | sudo tee /etc/foundationdb/fdb.cluster
+          # Write the cluster file for the queue service container
+          echo "$FDB_CLUSTER_DOCKER" > /tmp/fdb.cluster
 
           # Wait for FDB to be available (with retries)
           for i in {1..30}; do
@@ -495,6 +495,33 @@ jobs:
 
           # Verify FDB is working
           docker exec foundationdb fdbcli --exec "status" -C /var/fdb/fdb.cluster
+
+      - name: Start FDB Queue Service
+        run: |
+          # Build the FDB queue service image
+          docker build -t firecrawl-fdb-queue-service:latest ./apps/fdb-queue-service
+
+          # Run the queue service container
+          docker run -d --name fdb-queue-service \
+            -p 3100:3100 \
+            --add-host=host.docker.internal:host-gateway \
+            -v /tmp/fdb.cluster:/etc/foundationdb/fdb.cluster:ro \
+            -e FDB_CLUSTER_FILE=/etc/foundationdb/fdb.cluster \
+            -e PORT=3100 \
+            firecrawl-fdb-queue-service:latest
+
+          # Wait for the queue service to be healthy
+          for i in {1..30}; do
+            if curl -s http://localhost:3100/health | grep -q '"fdbConnected":true'; then
+              echo "FDB Queue Service is ready!"
+              break
+            fi
+            echo "Waiting for FDB Queue Service... (attempt $i/30)"
+            sleep 2
+          done
+
+          # Verify service health
+          curl -s http://localhost:3100/health
 
       - name: Run tests
         run: pnpm harness pnpm jest concurrency

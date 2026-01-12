@@ -52,6 +52,7 @@ const configSchema = z.object({
 
   // FoundationDB
   FDB_CLUSTER_FILE: z.string().optional(),
+  FDB_QUEUE_SERVICE_URL: z.string().optional(),
 
   // Supabase
   SUPABASE_URL: z.string().optional(),

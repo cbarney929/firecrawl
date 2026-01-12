@@ -19,11 +19,11 @@ import "dotenv/config";
 import { Pool } from "pg";
 import Redis from "ioredis";
 import { config } from "../src/config";
-import * as fdbQueue from "../src/services/fdb-queue";
+import * as fdbQueue from "../src/services/fdb-queue-client";
 
 const args = process.argv.slice(2);
 const dryRun = args.includes("--dry-run");
-const teamIdArg = args.find((a) => a.startsWith("--team-id="));
+const teamIdArg = args.find(a => a.startsWith("--team-id="));
 const specificTeamId = teamIdArg ? teamIdArg.split("=")[1] : null;
 
 console.log("=== FDB Queue Migration Script ===");
@@ -35,13 +35,13 @@ console.log("");
 
 async function main() {
   // Initialize connections
-  if (!config.FDB_CLUSTER_FILE) {
-    console.error("ERROR: FDB_CLUSTER_FILE is not configured");
+  if (!config.FDB_QUEUE_SERVICE_URL) {
+    console.error("ERROR: FDB_QUEUE_SERVICE_URL is not configured");
     process.exit(1);
   }
 
   if (!fdbQueue.initFDB()) {
-    console.error("ERROR: Failed to initialize FDB connection");
+    console.error("ERROR: Failed to initialize FDB Queue Service client");
     process.exit(1);
   }
 
@@ -78,7 +78,7 @@ async function main() {
       }
 
       console.log(
-        `\nTeam ${teamId}: ${members.length / 2} jobs in Redis queue`
+        `\nTeam ${teamId}: ${members.length / 2} jobs in Redis queue`,
       );
 
       for (let i = 0; i < members.length; i += 2) {
@@ -107,12 +107,12 @@ async function main() {
                 listenChannelId: job.listenChannelId,
               },
               timeout === Infinity ? 0 : timeout,
-              job.data?.crawl_id
+              job.data?.crawl_id,
             );
           }
 
           console.log(
-            `  Migrated job: ${job.id} (priority: ${job.priority}, crawl: ${job.data?.crawl_id ?? "none"})`
+            `  Migrated job: ${job.id} (priority: ${job.priority}, crawl: ${job.data?.crawl_id ?? "none"})`,
           );
           totalMigrated++;
         } catch (error) {
@@ -167,12 +167,12 @@ async function main() {
               listenChannelId: row.listen_channel_id,
             },
             timeout === Infinity ? 0 : timeout,
-            crawlId
+            crawlId,
           );
         }
 
         console.log(
-          `  Migrated job: ${row.id} (priority: ${row.priority}, crawl: ${crawlId ?? "none"})`
+          `  Migrated job: ${row.id} (priority: ${row.priority}, crawl: ${crawlId ?? "none"})`,
         );
         totalMigrated++;
       } catch (error) {
@@ -189,21 +189,15 @@ async function main() {
 
     if (dryRun) {
       console.log(
-        "\nThis was a DRY RUN. No changes were made. Run without --dry-run to perform the migration."
+        "\nThis was a DRY RUN. No changes were made. Run without --dry-run to perform the migration.",
       );
     } else {
       console.log("\nMigration complete!");
+      console.log("\nNext steps:");
+      console.log("1. Verify counts match between old and new systems");
+      console.log("2. Run the PostgreSQL migration to remove backlog table");
       console.log(
-        "\nNext steps:"
-      );
-      console.log(
-        "1. Verify counts match between old and new systems"
-      );
-      console.log(
-        "2. Run the PostgreSQL migration to remove backlog table"
-      );
-      console.log(
-        "3. Clear Redis keys (optional): redis-cli KEYS 'concurrency-limit-queue:*' | xargs redis-cli DEL"
+        "3. Clear Redis keys (optional): redis-cli KEYS 'concurrency-limit-queue:*' | xargs redis-cli DEL",
       );
     }
   } finally {
@@ -212,7 +206,7 @@ async function main() {
   }
 }
 
-main().catch((error) => {
+main().catch(error => {
   console.error("Migration failed:", error);
   process.exit(1);
 });

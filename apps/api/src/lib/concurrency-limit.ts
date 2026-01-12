@@ -4,7 +4,7 @@ import { getCrawl, StoredCrawl } from "./crawl-redis";
 import { logger } from "./logger";
 import { abTestJob } from "../services/ab-test";
 import { scrapeQueue, type NuQJob } from "../services/worker/nuq";
-import * as fdbQueue from "../services/fdb-queue";
+import * as fdbQueue from "../services/fdb-queue-client";
 
 // ============= Active Job Tracking =============
 

@@ -6,7 +6,7 @@ import { withSpan, setSpanAttributes } from "../../lib/otel-tracer";
 import amqp from "amqplib";
 import { v5 as uuidv5, validate as isUUID } from "uuid";
 import { config } from "../../config";
-import { getCrawlQueueCount, isFDBConfigured } from "../fdb-queue";
+import { getCrawlQueueCount, isFDBConfigured } from "../fdb-queue-client";
 
 // === Basics
 
