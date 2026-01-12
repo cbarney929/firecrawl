@@ -25,7 +25,9 @@ pub struct FdbQueueJob {
 pub struct PushJobRequest {
     pub team_id: String,
     pub job: JobInput,
-    pub timeout: i64,
+    /// Timeout in milliseconds. None means no timeout (Infinity in JS becomes null).
+    #[serde(default)]
+    pub timeout: Option<i64>,
     #[serde(default)]
     pub crawl_id: Option<String>,
 }

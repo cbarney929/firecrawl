@@ -226,12 +226,13 @@ impl FdbQueue {
         priority: i32,
         listenable: bool,
         listen_channel_id: Option<&str>,
-        timeout: i64,
+        timeout: Option<i64>,
         crawl_id: Option<&str>,
     ) -> Result<(), FdbError> {
         let now = Self::now_ms();
-        let has_timeout = crawl_id.is_none() && timeout > 0 && timeout < i64::MAX;
-        let times_out_at = if has_timeout { Some(now + timeout) } else { None };
+        // timeout is None when Infinity is passed from JS (serializes as null)
+        let has_timeout = crawl_id.is_none() && timeout.is_some_and(|t| t > 0 && t < i64::MAX);
+        let times_out_at = if has_timeout { Some(now + timeout.unwrap()) } else { None };
 
         let job = FdbQueueJob {
             id: job_id.to_string(),
