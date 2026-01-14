@@ -8,6 +8,24 @@ import { cacheableLookup } from "./cacheableLookup";
 import dns from "dns";
 import { AbortManagerThrownError } from "./abortManager";
 
+/**
+ * Get Sentry trace headers for distributed tracing propagation
+ */
+function getSentryTraceHeaders(): Record<string, string> {
+  if (!Sentry.isInitialized()) {
+    return {};
+  }
+  const traceData = Sentry.getTraceData();
+  const headers: Record<string, string> = {};
+  if (traceData["sentry-trace"]) {
+    headers["sentry-trace"] = traceData["sentry-trace"];
+  }
+  if (traceData["baggage"]) {
+    headers["baggage"] = traceData["baggage"];
+  }
+  return headers;
+}
+
 type RobustFetchParams<Schema extends z.Schema<any>> = {
   url: string;
   logger: Logger;
@@ -114,6 +132,7 @@ export async function robustFetch<
                   "Content-Type": "application/json",
                 }
               : {}),
+          ...getSentryTraceHeaders(),
           ...(headers !== undefined ? headers : {}),
         },
         signal: abort,

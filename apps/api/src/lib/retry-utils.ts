@@ -5,6 +5,24 @@ const RETRY_DELAYS = [500, 1500, 3000] as const;
 const MAX_ATTEMPTS = RETRY_DELAYS.length + 1;
 
 /**
+ * Get Sentry trace headers for distributed tracing propagation
+ */
+function getSentryTraceHeaders(): Record<string, string> {
+  if (!Sentry.isInitialized()) {
+    return {};
+  }
+  const traceData = Sentry.getTraceData();
+  const headers: Record<string, string> = {};
+  if (traceData["sentry-trace"]) {
+    headers["sentry-trace"] = traceData["sentry-trace"];
+  }
+  if (traceData["baggage"]) {
+    headers["baggage"] = traceData["baggage"];
+  }
+  return headers;
+}
+
+/**
  * Generic HTTP request function for Fire Engine API calls
  */
 export async function attemptRequest<T>(
@@ -18,6 +36,7 @@ export async function attemptRequest<T>(
       headers: {
         "Content-Type": "application/json",
         "X-Disable-Cache": "true",
+        ...getSentryTraceHeaders(),
       },
       body: data,
       signal: abort,
