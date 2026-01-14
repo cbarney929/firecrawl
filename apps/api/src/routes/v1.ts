@@ -38,6 +38,11 @@ import { paymentMiddleware } from "x402-express";
 import { queueStatusController } from "../controllers/v1/queue-status";
 import { creditUsageHistoricalController } from "../controllers/v1/credit-usage-historical";
 import { tokenUsageHistoricalController } from "../controllers/v1/token-usage-historical";
+import {
+  getNotificationPreferencesController,
+  updateNotificationPreferencesController,
+  testSlackWebhookController,
+} from "../controllers/v1/notification-preferences";
 import { facilitator } from "@coinbase/x402";
 
 expressWs(express());
@@ -305,6 +310,25 @@ v1Router.get(
   "/team/queue-status",
   authMiddleware(RateLimiterMode.CrawlStatus),
   wrap(queueStatusController),
+);
+
+// Notification preferences routes
+v1Router.get(
+  "/user/notification-preferences",
+  authMiddleware(RateLimiterMode.CrawlStatus),
+  wrap(getNotificationPreferencesController),
+);
+
+v1Router.put(
+  "/user/notification-preferences",
+  authMiddleware(RateLimiterMode.CrawlStatus),
+  wrap(updateNotificationPreferencesController),
+);
+
+v1Router.post(
+  "/user/notification-preferences/test-slack",
+  authMiddleware(RateLimiterMode.CrawlStatus),
+  wrap(testSlackWebhookController),
 );
 
 v1Router.post(

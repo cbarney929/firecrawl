@@ -4,7 +4,7 @@ import { withAuth } from "../../lib/withAuth";
 import { Resend } from "resend";
 import { NotificationType } from "../../types";
 import { logger } from "../../../src/lib/logger";
-import { sendSlackWebhook } from "../alerts/slack";
+import { sendSlackWebhook, sendUserSlackNotification } from "../alerts/slack";
 import { getNotificationString } from "./notification_string";
 import { AuthCreditUsageChunk } from "../../controllers/v1/types";
 import { redlock } from "../redlock";
@@ -198,6 +198,68 @@ async function sendLedgerEvent(
   }
 }
 
+/**
+ * Send Slack notification to a user if they have Slack notifications enabled
+ */
+async function sendSlackNotificationToUser(
+  userId: string,
+  teamId: string,
+  notificationType: NotificationType,
+  context: NotificationContext = {},
+) {
+  try {
+    // Get user's Slack preferences
+    const { data: preferences, error: prefError } = await supabase_service
+      .from("notification_preferences")
+      .select("slack_enabled, slack_webhook_url, slack_preferences")
+      .eq("user_id", userId)
+      .single();
+
+    if (prefError && prefError.code !== "PGRST116") {
+      logger.debug(`Error fetching Slack preferences for user ${userId}: ${prefError.message}`);
+      return { success: false };
+    }
+
+    // Check if Slack is enabled
+    if (!preferences?.slack_enabled || !preferences?.slack_webhook_url) {
+      return { success: true }; // Not an error, just not enabled
+    }
+
+    // Get the notification category
+    const notificationCategory = notificationToEmailCategory[notificationType];
+
+    // Check if user wants this category via Slack
+    if (
+      preferences.slack_preferences &&
+      Array.isArray(preferences.slack_preferences) &&
+      preferences.slack_preferences.length > 0 &&
+      !preferences.slack_preferences.includes(notificationCategory)
+    ) {
+      logger.debug(
+        `User ${userId} has not enabled ${notificationCategory} for Slack notifications`,
+      );
+      return { success: true };
+    }
+
+    // Send the Slack notification
+    const result = await sendUserSlackNotification(
+      preferences.slack_webhook_url,
+      notificationType,
+      teamId,
+      context,
+    );
+
+    if (!result.success) {
+      logger.warn(`Failed to send Slack notification to user ${userId}: ${result.error}`);
+    }
+
+    return result;
+  } catch (error) {
+    logger.warn(`Error sending Slack notification to user ${userId}: ${error}`);
+    return { success: false };
+  }
+}
+
 async function sendNotificationInternal(
   team_id: string,
   notificationType: NotificationType,
@@ -270,20 +332,25 @@ async function sendNotificationInternal(
           });
         });
       }
-      // get the emails from the user with the team_id
-      const { data: emails, error: emailsError } = await supabase_service
+      // get the users from the team_id (including id for Slack notifications)
+      const { data: users, error: usersError } = await supabase_service
         .from("users")
-        .select("email")
+        .select("id, email")
         .eq("team_id", team_id);
 
-      if (emailsError) {
-        logger.debug(`Error fetching emails: ${emailsError}`);
+      if (usersError) {
+        logger.debug(`Error fetching users: ${usersError}`);
         return { success: false };
       }
 
       if (!is_ledger_enabled) {
-        for (const email of emails) {
-          await sendEmailNotification(email.email, notificationType, context);
+        for (const user of users) {
+          // Send email notification
+          await sendEmailNotification(user.email, notificationType, context);
+          // Send Slack notification (non-blocking)
+          sendSlackNotificationToUser(user.id, team_id, notificationType, context).catch(error => {
+            logger.debug(`Error sending Slack notification to user ${user.id}: ${error}`);
+          });
         }
       }
 
@@ -298,9 +365,9 @@ async function sendNotificationInternal(
           },
         ]);
 
-      if (config.SLACK_ADMIN_WEBHOOK_URL && emails.length > 0) {
+      if (config.SLACK_ADMIN_WEBHOOK_URL && users.length > 0) {
         sendSlackWebhook(
-          `${getNotificationString(notificationType)}: Team ${team_id}, with email ${emails[0].email}. Number of credits used: ${chunk.adjusted_credits_used} | Number of credits in the plan: ${chunk.price_credits}`,
+          `${getNotificationString(notificationType)}: Team ${team_id}, with email ${users[0].email}. Number of credits used: ${chunk.adjusted_credits_used} | Number of credits in the plan: ${chunk.price_credits}`,
           false,
           config.SLACK_ADMIN_WEBHOOK_URL,
         ).catch(error => {
@@ -389,14 +456,14 @@ export async function sendNotificationWithCustomDays(
       logger.info(
         `Sending notification for team_id: ${team_id} and notificationType: ${notificationType}`,
       );
-      // get the emails from the user with the team_id
-      const { data: emails, error: emailsError } = await supabase_service
+      // get the users from the team_id (including id for Slack notifications)
+      const { data: users, error: usersError } = await supabase_service
         .from("users")
-        .select("email")
+        .select("id, email")
         .eq("team_id", team_id);
 
-      if (emailsError) {
-        logger.debug(`Error fetching emails: ${emailsError}`);
+      if (usersError) {
+        logger.debug(`Error fetching users: ${usersError}`);
         await redisEvictConnection.del(redisKey); // free up redis, let it try again
         return { success: false };
       }
@@ -412,8 +479,13 @@ export async function sendNotificationWithCustomDays(
       }
 
       if (!is_ledger_enabled) {
-        for (const email of emails) {
-          await sendEmailNotification(email.email, notificationType);
+        for (const user of users) {
+          // Send email notification
+          await sendEmailNotification(user.email, notificationType);
+          // Send Slack notification (non-blocking)
+          sendSlackNotificationToUser(user.id, team_id, notificationType).catch(error => {
+            logger.debug(`Error sending Slack notification to user ${user.id}: ${error}`);
+          });
         }
       }
 
@@ -430,11 +502,11 @@ export async function sendNotificationWithCustomDays(
 
       if (
         config.SLACK_ADMIN_WEBHOOK_URL &&
-        emails.length > 0 &&
+        users.length > 0 &&
         notificationType !== NotificationType.CONCURRENCY_LIMIT_REACHED
       ) {
         sendSlackWebhook(
-          `${getNotificationString(notificationType)}: Team ${team_id}, with email ${emails[0].email}.`,
+          `${getNotificationString(notificationType)}: Team ${team_id}, with email ${users[0].email}.`,
           false,
           config.SLACK_ADMIN_WEBHOOK_URL,
         ).catch(error => {
