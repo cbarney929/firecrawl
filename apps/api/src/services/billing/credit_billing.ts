@@ -117,6 +117,7 @@ async function supaCheckTeamCredits(
     }
   } catch (error) {
     // If organization check fails, continue with normal credit checks
+    logger.warn("Organization check failed, continuing with normal credit checks", { team_id, error });
   }
 
   const remainingCredits = chunk.price_should_be_graceful
