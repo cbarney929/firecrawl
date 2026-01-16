@@ -10,9 +10,53 @@ concurrency:
   group: ci-k8s=${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+  packages: write
+
 jobs:
+  build-images:
+    name: build images (cached)
+    runs-on: ubuntu-2404
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: firecrawl
+            context: ./apps/api
+            dockerfile: ./apps/api/Dockerfile
+            image: ghcr.io/${{ github.repository_owner }}/firecrawl-ci
+          - name: test-site
+            context: ./apps/test-site
+            dockerfile: ./apps/test-site/Dockerfile
+            image: ghcr.io/${{ github.repository_owner }}/test-site-ci
+          - name: playwright-service
+            context: ./apps/playwright-service-ts
+            dockerfile: ./apps/playwright-service-ts/Dockerfile
+            image: ghcr.io/${{ github.repository_owner }}/playwright-service-ci
+    steps:
+      - uses: actions/checkout@v5
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - name: Build and push image
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
+          push: true
+          tags: ${{ matrix.image }}:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
   k8s-test:
     name: k8s environment tests
+    needs: build-images
     strategy:
       fail-fast: false
       matrix:
@@ -96,24 +140,6 @@ jobs:
           sudo chown $USER:$USER ~/.kube/config
           chmod 600 ~/.kube/config
 
-      - name: Setup local Docker registry
-        run: |
-          docker run -d -p 5000:5000 --restart=always --name registry registry:2
-
-          # Configure k3s to use insecure local registry
-          sudo mkdir -p /etc/rancher/k3s
-          cat <<EOF | sudo tee /etc/rancher/k3s/registries.yaml
-          mirrors:
-            "localhost:5000":
-              endpoint:
-                - "http://localhost:5000"
-          EOF
-
-          # Restart k3s to pick up registry config
-          sudo systemctl restart k3s
-          sleep 10
-          kubectl wait --for=condition=ready node --all --timeout=60s
-
       - name: Install Helm
         run: |
           curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
@@ -158,34 +184,24 @@ jobs:
           kubectl get pods -n default -l app.kubernetes.io/name=ingress-nginx
 
       # ===========================================
-      # Phase 3: Build and Push Container Images
-      # ===========================================
-
-      - name: Record image build start
-        run: echo "image_build_start,$(date +%s)" >> logs/performance/timings.csv
-
-      - name: Build and push Firecrawl image
-        working-directory: ./apps/api
-        run: |
-          echo "=== Building Firecrawl image ==="
-          docker build -t localhost:5000/firecrawl/firecrawl:${{ github.sha }} .
-
-          echo "=== Pushing to local registry ==="
-          docker push localhost:5000/firecrawl/firecrawl:${{ github.sha }}
-
-          echo "=== Verifying image in registry ==="
-          curl -s http://localhost:5000/v2/_catalog
-          curl -s http://localhost:5000/v2/firecrawl/firecrawl/tags/list
-
-      - name: Record image build end
-        run: echo "image_build_end,$(date +%s)" >> logs/performance/timings.csv
-
-      # ===========================================
       # Phase 2: Core Services Deployment
       # ===========================================
 
       - name: Record core services start
         run: echo "core_services_start,$(date +%s)" >> logs/performance/timings.csv
+
+      - name: Create GHCR image pull secret
+        env:
+          GHCR_TOKEN: ${{ github.token }}
+        run: |
+          kubectl create secret docker-registry ghcr-cred \
+            --docker-server=ghcr.io \
+            --docker-username="${{ github.actor }}" \
+            --docker-password="$GHCR_TOKEN" \
+            --docker-email="noreply@github.com" \
+            --dry-run=client -o yaml | kubectl apply -f -
+
+          kubectl patch serviceaccount default -p '{"imagePullSecrets":[{"name":"ghcr-cred"}]}'
 
       - name: Create secrets for Firecrawl
         run: |
@@ -205,7 +221,9 @@ jobs:
           # Deploy using CI test values
           helm install firecrawl ./infra/helm-charts/firecrawl \
             -f ./infra/helm-charts/firecrawl/values-ci-test.yaml \
+            --set image.repository=ghcr.io/${{ github.repository_owner }}/firecrawl-ci \
             --set image.tag=${{ github.sha }} \
+            --set image.pullSecrets[0].name=ghcr-cred \
             --wait \
             --timeout 10m \
             --debug
@@ -248,25 +266,6 @@ jobs:
       - name: Record supporting services start
         run: echo "supporting_services_start,$(date +%s)" >> logs/performance/timings.csv
 
-      - name: Build and push test-site image
-        working-directory: ./apps/test-site
-        run: |
-          echo "=== Building test-site image ==="
-          docker build -t localhost:5000/firecrawl/test-site:${{ github.sha }} .
-
-          echo "=== Pushing to local registry ==="
-          docker push localhost:5000/firecrawl/test-site:${{ github.sha }}
-
-      - name: Build and push playwright-service image
-        if: matrix.engine == 'playwright'
-        working-directory: ./apps/playwright-service-ts
-        run: |
-          echo "=== Building playwright-service image ==="
-          docker build -t localhost:5000/firecrawl/playwright-service:${{ github.sha }} .
-
-          echo "=== Pushing to local registry ==="
-          docker push localhost:5000/firecrawl/playwright-service:${{ github.sha }}
-
       - name: Deploy test-site
         run: |
           cat <<EOF | kubectl apply -f -
@@ -284,9 +283,11 @@ jobs:
                 labels:
                   app: test-site
               spec:
+                imagePullSecrets:
+                - name: ghcr-cred
                 containers:
                 - name: test-site
-                  image: localhost:5000/firecrawl/test-site:${{ github.sha }}
+                  image: ghcr.io/${{ github.repository_owner }}/test-site-ci:${{ github.sha }}
                   ports:
                   - containerPort: 4321
                   resources:
@@ -425,9 +426,11 @@ jobs:
                 labels:
                   app: playwright-service
               spec:
+                imagePullSecrets:
+                - name: ghcr-cred
                 containers:
                 - name: playwright
-                  image: localhost:5000/firecrawl/playwright-service:${{ github.sha }}
+                  image: ghcr.io/${{ github.repository_owner }}/playwright-service-ci:${{ github.sha }}
                   ports:
                   - containerPort: 3003
                   env:
@@ -649,6 +652,14 @@ jobs:
           cache-dependency-path: |
             apps/api/pnpm-lock.yaml
 
+      - name: Cache pnpm store
+        uses: actions/cache@v4
+        with:
+          path: ~/.pnpm-store
+          key: ${{ runner.os }}-pnpm-${{ hashFiles('apps/api/pnpm-lock.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-pnpm-
+
       - run: pnpm fetch
         working-directory: apps/api
 
@@ -726,7 +737,7 @@ jobs:
         env:
           # Override environment variables to use localhost (port-forwarded endpoints)
           TEST_API_URL: http://127.0.0.1:3002
-          TEST_SUITE_WEBSITE: http://test-site:4321
+          TEST_SUITE_WEBSITE: http://test-site.default.svc.cluster.local:4321
           TEST_SUITE_SELF_HOSTED: true
           OPENAI_API_KEY: ${{ matrix.ai == 'openai' && secrets.OPENAI_API_KEY || '' }}
           SEARXNG_ENDPOINT: ${{ matrix.search == 'searxng' && 'http://127.0.0.1:3434' || '' }}
