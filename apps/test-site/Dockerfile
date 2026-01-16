@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1.5
 # Dockerfile for Firecrawl test site
 # Used in CI for running E2E tests against a local test website
 
@@ -12,7 +13,9 @@ RUN npm install -g pnpm
 COPY package.json pnpm-lock.yaml* ./
 
 # Install dependencies
-RUN pnpm install --frozen-lockfile 2>/dev/null || pnpm install
+ENV PNPM_STORE_PATH=/root/.pnpm-store
+RUN --mount=type=cache,target=/root/.pnpm-store \
+    pnpm install --frozen-lockfile 2>/dev/null || pnpm install
 
 # Copy source
 COPY . .

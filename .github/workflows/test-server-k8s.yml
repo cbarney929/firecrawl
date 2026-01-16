@@ -51,8 +51,8 @@ jobs:
           file: ${{ matrix.dockerfile }}
           push: true
           tags: ${{ matrix.image }}:${{ github.sha }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=${{ matrix.name }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.name }}
 
   k8s-test:
     name: k8s environment tests
@@ -221,7 +221,8 @@ jobs:
           # Deploy using CI test values
           helm install firecrawl ./infra/helm-charts/firecrawl \
             -f ./infra/helm-charts/firecrawl/values-ci-test.yaml \
-            --set image.repository=ghcr.io/${{ github.repository_owner }}/firecrawl-ci \
+            --set image.registry=ghcr.io \
+            --set image.repository=${{ github.repository_owner }}/firecrawl-ci \
             --set image.tag=${{ github.sha }} \
             --set image.pullSecrets[0].name=ghcr-secret \
             --wait \
