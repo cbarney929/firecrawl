@@ -541,7 +541,7 @@ jobs:
           echo "--- Core Services ---"
 
           # Firecrawl API health check
-          if ! check_health "firecrawl-api" "http://firecrawl-app:3002/is-production"; then
+          if ! check_health "firecrawl-api" "http://app-service:3002/is-production"; then
             HEALTH_FAILED=1
             echo "  Firecrawl API pod logs:"
             kubectl logs -l app.kubernetes.io/name=firecrawl,app.kubernetes.io/component=app --tail=20 || true
@@ -666,7 +666,7 @@ jobs:
           echo "=== Setting up port forwarding ==="
 
           # Forward Firecrawl API (3002)
-          kubectl port-forward service/firecrawl-app 3002:3002 &
+          kubectl port-forward service/app-service 3002:3002 &
           PF_API_PID=$!
           echo "API port-forward PID: $PF_API_PID"
 
