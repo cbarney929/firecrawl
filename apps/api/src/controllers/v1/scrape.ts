@@ -21,6 +21,7 @@ import { ScrapeJobData } from "../../types";
 import { AbortManagerThrownError } from "../../scraper/scrapeURL/lib/abortManager";
 import { logRequest } from "../../services/logging/log_job";
 import { getErrorContactMessage } from "../../lib/deployment";
+import { captureExceptionWithZdrCheck } from "../../services/sentry";
 
 export async function scrapeController(
   req: RequestWithAuth<{}, ScrapeResponse, ScrapeRequest>,
@@ -205,6 +206,18 @@ export async function scrapeController(
         errorId: id,
         path: req.path,
         teamId: req.auth.team_id,
+      });
+      captureExceptionWithZdrCheck(e, {
+        tags: {
+          errorId: id,
+          version: "v1",
+          teamId: req.auth.team_id,
+        },
+        extra: {
+          path: req.path,
+          url: req.body.url,
+        },
+        zeroDataRetention,
       });
       return res.status(500).json({
         success: false,

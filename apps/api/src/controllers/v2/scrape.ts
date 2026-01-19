@@ -21,6 +21,7 @@ import { teamConcurrencySemaphore } from "../../services/worker/team-semaphore";
 import { getJobPriority } from "../../lib/job-priority";
 import { logRequest } from "../../services/logging/log_job";
 import { getErrorContactMessage } from "../../lib/deployment";
+import { captureExceptionWithZdrCheck } from "../../services/sentry";
 
 export async function scrapeController(
   req: RequestWithAuth<{}, ScrapeResponse, ScrapeRequest>,
@@ -313,6 +314,18 @@ export async function scrapeController(
             errorId: id,
             path: req.path,
             teamId: req.auth.team_id,
+          });
+          captureExceptionWithZdrCheck(e, {
+            tags: {
+              errorId: id,
+              version: "v2",
+              teamId: req.auth.team_id,
+            },
+            extra: {
+              path: req.path,
+              url: req.body.url,
+            },
+            zeroDataRetention,
           });
           setSpanAttributes(span, {
             "scrape.status_code": 500,
