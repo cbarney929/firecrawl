@@ -26,7 +26,36 @@ export const getBrandingScript = () => String.raw`
   };
 
   const styleCache = new WeakMap();
+  const emptyStyle = {
+    fontFamily: '',
+    fontSize: '',
+    fontWeight: '',
+    color: '',
+    backgroundColor: 'transparent',
+    borderRadius: '',
+    borderTopLeftRadius: '',
+    borderTopRightRadius: '',
+    borderBottomLeftRadius: '',
+    borderBottomRightRadius: '',
+    borderTopColor: '',
+    borderRightColor: '',
+    borderBottomColor: '',
+    borderLeftColor: '',
+    borderTopWidth: '0px',
+    borderRightWidth: '0px',
+    borderBottomWidth: '0px',
+    borderLeftWidth: '0px',
+    boxShadow: 'none',
+    paddingTop: '0px',
+    paddingBottom: '0px',
+    paddingLeft: '0px',
+    paddingRight: '0px',
+    getPropertyValue: () => '',
+  };
   const getComputedStyleCached = (el) => {
+    if (!el || !(el instanceof Element)) {
+      return emptyStyle;
+    }
     if (styleCache.has(el)) {
       return styleCache.get(el);
     }
@@ -41,12 +70,12 @@ export const getBrandingScript = () => String.raw`
     if (v.endsWith("rem"))
       return (
         parseFloat(v) *
-        parseFloat(getComputedStyle(document.documentElement).fontSize || 16)
+        parseFloat((document.documentElement ? getComputedStyle(document.documentElement).fontSize : null) || 16)
       );
     if (v.endsWith("em"))
       return (
         parseFloat(v) *
-        parseFloat(getComputedStyle(document.body).fontSize || 16)
+        parseFloat((document.body ? getComputedStyle(document.body).fontSize : null) || 16)
       );
     if (v.endsWith("%")) return null;
     const num = parseFloat(v);
