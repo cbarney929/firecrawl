@@ -1,7 +1,9 @@
 import { config } from "./config";
-import { type ChildProcess, spawn } from "child_process";
+import { type ChildProcess, spawn, exec } from "child_process";
 import * as net from "net";
-import { basename, join } from "path";
+import { promisify } from "util";
+import { basename, join, resolve, dirname } from "path";
+import { existsSync } from "fs";
 import { HTML_TO_MARKDOWN_PATH } from "./natives";
 
 const childProcesses = new Set<ChildProcess>();
@@ -19,10 +21,28 @@ let nuqRabbitMQContainer: {
   containerRuntime: string;
 } | null = null;
 
-// Get the monorepo root (apps/api/dist/src -> ../../../..)
-// __dirname is available in CommonJS (which this compiles to)
-const MONOREPO_ROOT = join(__dirname, "..", "..", "..", "..");
-const NUQ_POSTGRES_PATH = join(MONOREPO_ROOT, "apps", "nuq-postgres");
+// Get the monorepo root by searching upward for a marker file
+function findMonorepoRoot(startPath: string): string {
+  let current = resolve(startPath);
+  const root = resolve("/");
+
+  while (current !== root) {
+    // Check for marker files that indicate the monorepo root
+    if (
+      existsSync(join(current, "CLAUDE.md")) ||
+      existsSync(join(current, "docker-compose.yaml"))
+    ) {
+      return current;
+    }
+    current = dirname(current);
+  }
+
+  // Fallback: assume standard structure (apps/api/dist/src -> ../../../..)
+  return resolve(__dirname, "..", "..", "..", "..");
+}
+
+const MONOREPO_ROOT = findMonorepoRoot(__dirname);
+const NUQ_POSTGRES_PATH = resolve(MONOREPO_ROOT, "apps", "nuq-postgres");
 
 interface ProcessResult {
   promise: Promise<void>;
@@ -396,12 +416,11 @@ async function isContainerRunning(
   containerName: string,
 ): Promise<boolean> {
   try {
-    const check = execForward(
-      `${runtime}@ps`,
+    const execPromise = promisify(exec);
+    const { stdout } = await execPromise(
       `${runtime} ps -a --filter name=^${containerName}$ --format '{{.Names}}'`,
     );
-    await check.promise;
-    return true;
+    return stdout.trim() === containerName;
   } catch {
     return false;
   }
@@ -439,6 +458,17 @@ async function stopAndRemoveContainer(
 
 async function buildNuqPostgresImage(runtime: string): Promise<void> {
   logger.info("Building nuq-postgres Docker image");
+
+  // Verify the path exists
+  if (!existsSync(NUQ_POSTGRES_PATH)) {
+    throw new Error(
+      `NUQ Postgres path does not exist: ${NUQ_POSTGRES_PATH}\n` +
+        `__dirname: ${__dirname}\n` +
+        `MONOREPO_ROOT: ${MONOREPO_ROOT}\n` +
+        `process.cwd(): ${process.cwd()}`,
+    );
+  }
+
   const build = execForward(
     `${runtime}@build`,
     `${runtime} build -t firecrawl-nuq-postgres:latest ${NUQ_POSTGRES_PATH}`,
