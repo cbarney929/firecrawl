@@ -13,6 +13,13 @@ import {
 } from "./logo-selector";
 import { calculateLogoArea } from "./types";
 
+function isDebugBrandingEnabled(meta: Meta): boolean {
+  return (
+    config.DEBUG_BRANDING === true ||
+    meta.internalOptions.teamFlags?.debugBranding === true
+  );
+}
+
 export async function brandingTransformer(
   meta: Meta,
   document: Document,
@@ -26,17 +33,27 @@ export async function brandingTransformer(
 
   let brandingProfile: BrandingProfile = jsBranding;
 
+  // Declare variables outside try block for catch block access
+  const buttonSnapshots: ButtonSnapshot[] =
+    (jsBranding as any).__button_snapshots || [];
+  const inputSnapshots = (jsBranding as any).__input_snapshots || [];
+  const logoCandidates = rawBranding.logoCandidates || [];
+  const brandName = rawBranding.brandName;
+  const backgroundCandidates = rawBranding.backgroundCandidates || [];
+
+  // Initialize metadata tracking variables
+  let llmButtonClassificationSucceeded = false;
+  let llmLogoSelectionSucceeded = false;
+  let logoSelectionFinalSource: "llm" | "heuristic" | "fallback" | "none" =
+    "none";
+  let logoSelectionError: string | undefined = undefined;
+  let needsLLMValidation = false;
+  let heuristicResult: ReturnType<typeof selectLogoWithConfidence> | null =
+    null;
+
   try {
-    const buttonSnapshots: ButtonSnapshot[] =
-      (jsBranding as any).__button_snapshots || [];
-    const inputSnapshots = (jsBranding as any).__input_snapshots || [];
-
-    const logoCandidates = rawBranding.logoCandidates || [];
-    const brandName = rawBranding.brandName;
-    const backgroundCandidates = rawBranding.backgroundCandidates || [];
-
     // TIER 1: Use smart heuristics to get initial selection
-    const heuristicResult =
+    heuristicResult =
       logoCandidates.length > 0
         ? selectLogoWithConfidence(logoCandidates, brandName)
         : null;
@@ -53,7 +70,7 @@ export async function brandingTransformer(
     }
 
     // TIER 2: Decide if we need LLM validation
-    const needsLLMValidation = heuristicResult
+    needsLLMValidation = heuristicResult
       ? shouldUseLLMForLogoSelection(heuristicResult.confidence)
       : false;
 
@@ -143,7 +160,13 @@ export async function brandingTransformer(
       screenshot: document.screenshot,
       url: document.url || meta.url,
       teamId: meta.internalOptions.teamId,
+      teamFlags: meta.internalOptions.teamFlags,
     });
+
+    // Track LLM success/failure status (will be updated after all processing)
+    llmButtonClassificationSucceeded =
+      llmEnhancement.buttonClassification.primaryButtonReasoning !==
+        "LLM failed" && llmEnhancement.buttonClassification.confidence > 0;
 
     // Map LLM's filtered index back to original index for logos
     if (needsLLMValidation && llmEnhancement.logoSelection) {
@@ -172,8 +195,13 @@ export async function brandingTransformer(
             confidence: Math.max(heuristicResult.confidence - 0.1, 0.3), // Slightly lower confidence
           };
         } else {
-          // No heuristic result available - clear LLM selection
-          llmEnhancement.logoSelection = undefined;
+          // No heuristic result available - no logo found
+          llmEnhancement.logoSelection = {
+            selectedLogoIndex: -1,
+            selectedLogoReasoning:
+              "No valid logo found - LLM returned invalid index and no heuristic result available",
+            confidence: 0,
+          };
         }
       }
     }
@@ -302,6 +330,45 @@ export async function brandingTransformer(
       }
     }
 
+    // Determine final logo selection source after all processing
+    if (llmEnhancement.logoSelection) {
+      const reasoning = llmEnhancement.logoSelection.selectedLogoReasoning;
+      if (
+        reasoning !== "LLM failed" &&
+        !reasoning.includes("Heuristic fallback") &&
+        !reasoning.includes("Heuristic preferred") &&
+        !reasoning.includes("Heuristic preferred over LLM") &&
+        !reasoning.includes("Heuristic fallback (LLM returned invalid index)")
+      ) {
+        llmLogoSelectionSucceeded = true;
+        logoSelectionFinalSource = "llm";
+      } else if (
+        reasoning.includes("Heuristic") ||
+        reasoning.includes("heuristic")
+      ) {
+        logoSelectionFinalSource = "heuristic";
+        if (
+          reasoning.includes("LLM returned invalid index") ||
+          reasoning.includes("invalid index")
+        ) {
+          logoSelectionError = "LLM returned invalid logo index";
+        } else if (reasoning.includes("LLM picked worse logo")) {
+          logoSelectionError =
+            "LLM picked objectively worse logo than heuristic";
+        }
+      } else {
+        logoSelectionFinalSource = "fallback";
+        logoSelectionError = reasoning;
+      }
+    } else if (!needsLLMValidation && heuristicResult) {
+      logoSelectionFinalSource = "heuristic";
+    } else if (needsLLMValidation) {
+      logoSelectionFinalSource = "fallback";
+      logoSelectionError = "LLM did not return logo selection";
+    } else if (logoCandidates.length === 0) {
+      logoSelectionFinalSource = "none";
+    }
+
     meta.logger.info("Branding enhancement complete", {
       primary_btn_index: llmEnhancement.buttonClassification.primaryButtonIndex,
       secondary_btn_index:
@@ -325,6 +392,26 @@ export async function brandingTransformer(
       logoCandidates.length > 0 ? logoCandidates : undefined,
     );
 
+    // Add LLM metadata for evals
+    (brandingProfile as any).__llm_metadata = {
+      logoSelection: {
+        llmCalled: needsLLMValidation,
+        llmSucceeded: llmLogoSelectionSucceeded,
+        finalSource: logoSelectionFinalSource,
+        error: logoSelectionError,
+      },
+      buttonClassification: {
+        llmCalled: buttonSnapshots.length > 0,
+        llmSucceeded: llmButtonClassificationSucceeded,
+        error:
+          !llmButtonClassificationSucceeded &&
+          llmEnhancement.buttonClassification.primaryButtonReasoning ===
+            "LLM failed"
+            ? "LLM call failed or returned fallback values"
+            : undefined,
+      },
+    };
+
     meta.logger.info("Input fields detected", {
       count: inputSnapshots.length,
       types: inputSnapshots.map((i: any) => i.type).slice(0, 10),
@@ -335,11 +422,27 @@ export async function brandingTransformer(
       { error },
     );
     brandingProfile = jsBranding;
+
+    // Add error metadata
+    (brandingProfile as any).__llm_metadata = {
+      logoSelection: {
+        llmCalled: needsLLMValidation,
+        llmSucceeded: false,
+        finalSource: heuristicResult ? "heuristic" : "none",
+        error: error instanceof Error ? error.message : String(error),
+      },
+      buttonClassification: {
+        llmCalled: buttonSnapshots.length > 0,
+        llmSucceeded: false,
+        error: error instanceof Error ? error.message : String(error),
+      },
+    };
   }
 
-  if (config.DEBUG_BRANDING !== true) {
+  if (!isDebugBrandingEnabled(meta)) {
     delete (brandingProfile as any).__button_snapshots;
     delete (brandingProfile as any).__input_snapshots;
+    delete (brandingProfile as any).__logo_candidates;
   }
 
   return brandingProfile;

@@ -11,6 +11,9 @@ export function buildBrandingPrompt(input: BrandingLLMInput): string {
     backgroundCandidates,
     url,
   } = input;
+  const normalizedBrandName = (brandName || "")
+    .toLowerCase()
+    .replace(/\s+/g, "");
 
   let prompt = `Analyze the branding of this website: ${url}\n\n`;
 
@@ -91,6 +94,95 @@ export function buildBrandingPrompt(input: BrandingLLMInput): string {
       description,
       saturation: saturation.toFixed(2),
       brightness: brightness.toFixed(2),
+    };
+  };
+
+  const baseHostname = (() => {
+    try {
+      return new URL(url).hostname.toLowerCase();
+    } catch {
+      return "";
+    }
+  })();
+
+  const extractFilename = (src: string) => {
+    if (!src) return "";
+    const withoutQuery = src.split("?")[0].split("#")[0];
+    const parts = withoutQuery.split("/");
+    return parts.pop() || "";
+  };
+
+  const classifyHref = (href?: string, hrefMatch?: boolean) => {
+    if (!href || !href.trim()) return "none";
+    if (hrefMatch) return "home";
+    try {
+      const resolved = new URL(href, url);
+      if (!resolved.hostname || !baseHostname) return "internal";
+      return resolved.hostname.toLowerCase() === baseHostname
+        ? "internal"
+        : "external";
+    } catch {
+      return "unknown";
+    }
+  };
+
+  const getLogoCandidateMeta = (
+    candidate: NonNullable<BrandingLLMInput["logoCandidates"]>[number],
+  ) => {
+    const width = Math.max(0, Math.round(candidate.position?.width || 0));
+    const height = Math.max(0, Math.round(candidate.position?.height || 0));
+    const top = Math.max(0, Math.round(candidate.position?.top || 0));
+    const left = Math.max(0, Math.round(candidate.position?.left || 0));
+    const area = Math.max(0, Math.round(width * height));
+    const aspectRatio =
+      width && height ? Math.max(width / height, height / width) : 0;
+    const maxSide = Math.max(width, height);
+
+    let sizeLabel = "unknown";
+    if (maxSide <= 24 || area <= 400) sizeLabel = "tiny";
+    else if (maxSide <= 48 || area <= 1800) sizeLabel = "small";
+    else if (maxSide <= 140 || area <= 12000) sizeLabel = "medium";
+    else if (maxSide <= 320 || area <= 50000) sizeLabel = "large";
+    else sizeLabel = "hero";
+
+    const hrefType = classifyHref(
+      candidate.href,
+      candidate.indicators?.hrefMatch,
+    );
+    const srcFilename = extractFilename(candidate.src);
+    const filenameHasLogo = /logo|brand/i.test(srcFilename || "");
+    const srcHasLogo = /logo|brand/i.test(candidate.src);
+
+    const hints: string[] = [];
+    if (filenameHasLogo || srcHasLogo) hints.push("filename=logo");
+    if (sizeLabel === "tiny" || sizeLabel === "small") hints.push("icon-sized");
+    if (sizeLabel === "hero") hints.push("hero-sized");
+    if (aspectRatio >= 3 && width >= 80) hints.push("wordmark-shaped");
+    if (hrefType === "external") hints.push("external-link");
+    if (
+      normalizedBrandName &&
+      candidate.alt &&
+      candidate.alt
+        .toLowerCase()
+        .replace(/\s+/g, "")
+        .includes(normalizedBrandName)
+    ) {
+      hints.push("alt~=brand");
+    }
+    if (candidate.isSvg && candidate.logoSvgScore !== undefined) {
+      hints.push(`svgScore:${Math.round(candidate.logoSvgScore)}`);
+    }
+
+    return {
+      width,
+      height,
+      top,
+      left,
+      area,
+      aspectRatio,
+      sizeLabel,
+      hrefType,
+      hints,
     };
   };
 
@@ -183,7 +275,7 @@ export function buildBrandingPrompt(input: BrandingLLMInput): string {
       prompt += `Brand Name: "${brandName}" - The logo should visually represent or contain this name.\n\n`;
     }
 
-    // Compact format: index, location, visible, alt, indicators, href, truncated URL
+    // Compact format: index, location, visible, size, href type, indicators, hints, URL
     logoCandidates.forEach((candidate, idx) => {
       const indicators: string[] = [];
       if (candidate.indicators.inHeader) indicators.push("header");
@@ -192,16 +284,26 @@ export function buildBrandingPrompt(input: BrandingLLMInput): string {
       if (candidate.indicators.classMatch) indicators.push("class=logo");
       if (candidate.indicators.hrefMatch) indicators.push("href=home");
 
+      const meta = getLogoCandidateMeta(candidate);
       const urlPreview =
         candidate.src.length > 80
           ? candidate.src.substring(0, 80) + "..."
           : candidate.src;
 
-      const hrefInfo = candidate.href ? ` | href:${candidate.href}` : "";
       const typeLabel = candidate.isSvg ? "SVG" : "IMG";
+      const aspectLabel = meta.aspectRatio
+        ? meta.aspectRatio.toFixed(1)
+        : "n/a";
+      const hintLabel = meta.hints.length > 0 ? meta.hints.join(", ") : "none";
 
-      prompt += `#${idx}: ${candidate.location} | ${candidate.isVisible ? "visible" : "hidden"} | ${typeLabel} | alt:"${candidate.alt || ""}" | [${indicators.join(", ")}]${hrefInfo} | ${urlPreview}\n`;
+      prompt += `#${idx}: ${candidate.location} | ${candidate.isVisible ? "visible" : "hidden"} | ${typeLabel} | size:${meta.width}x${meta.height} (${meta.sizeLabel}, area:${meta.area}, aspect:${aspectLabel}) | top:${meta.top}px left:${meta.left}px | href:${meta.hrefType} | alt:"${candidate.alt || ""}" | aria:"${candidate.ariaLabel || ""}" | indicators:[${indicators.join(", ")}] | hints:[${hintLabel}] | ${urlPreview}\n`;
     });
+
+    prompt += `\n**Candidate Hints (how to use them):**\n`;
+    prompt += `- size labels: tiny/small are usually UI icons; hero-sized are usually hero images/banners\n`;
+    prompt += `- wordmark-shaped is OK if it is in header and links to homepage\n`;
+    prompt += `- href:home/internal is a strong brand signal; href:external is usually NOT the brand logo\n`;
+    prompt += `- svgScore is only for SVGs (higher = more logo-like graphic)\n\n`;
 
     prompt += `\n**LOGO SELECTION - SIMPLE APPROACH:**\n`;
     if (input.screenshot) {
@@ -292,20 +394,23 @@ export function buildBrandingPrompt(input: BrandingLLMInput): string {
   prompt += `${buttons && buttons.length > 0 ? "3" : "1"}. **Color Roles**: Based on ${buttons && buttons.length > 0 ? "button colors and " : ""}page context:\n`;
   prompt += `   - PRIMARY brand color (usually logo/heading color)\n`;
   prompt += `   - ACCENT color (${buttons && buttons.length > 0 ? "usually the vibrant CTA button background - green, blue, etc." : "vibrant accent color from the page"})\n`;
-  prompt += `   - Background and text colors\n\n`;
+  prompt += `   - Background and text colors\n`;
+  prompt += `   - If unsure about any color, return an empty string "" for that field (NOT null)\n\n`;
 
-  prompt += `${buttons && buttons.length > 0 ? "4" : "2"}. **Brand Personality**: Overall tone and energy\n\n`;
+  prompt += `${buttons && buttons.length > 0 ? "4" : "2"}. **Brand Personality**: Overall tone, energy, and target audience\n`;
+  prompt += `   - If unsure about target audience, return "unknown"\n\n`;
 
   prompt += `${buttons && buttons.length > 0 ? "5" : "3"}. **Design System**: Based on the class patterns shown above:\n`;
   prompt += `   - **Framework**: Identify the CSS framework (tailwind/bootstrap/material/chakra/custom/unknown)\n`;
   prompt += `   - **Component Library**: Look for prefixes like \`radix-\`, \`shadcn-\`, \`headlessui-\`, or \`react-aria-\` in classes\n`;
-  prompt += `   - If using Tailwind + a component library, identify both (e.g., framework: tailwind, componentLibrary: "radix-ui")\n\n`;
+  prompt += `   - If using Tailwind + a component library, identify both (e.g., framework: tailwind, componentLibrary: "radix-ui")\n`;
+  prompt += `   - If no component library is detected, return an empty string ""\n\n`;
 
   prompt += `${buttons && buttons.length > 0 ? "6" : "4"}. **Clean Fonts**: Return up to 5 cleaned, human-readable font names\n`;
   prompt += `   - Remove framework obfuscation (Next.js hashes, etc.)\n`;
   prompt += `   - Filter out generics and CSS variables\n`;
   prompt += `   - Prioritize by frequency (shown in usage count)\n`;
-  prompt += `   - Assign appropriate roles (heading, body, monospace, display)\n\n`;
+  prompt += `   - Assign appropriate roles (heading, body, monospace, display) or "unknown"\n\n`;
 
   if (logoCandidates && logoCandidates.length > 0) {
     const logoTaskNumber = buttons && buttons.length > 0 ? "7" : "5";

@@ -48,6 +48,7 @@ export interface BrandingLLMInput {
   logoCandidates?: Array<{
     src: string;
     alt: string;
+    ariaLabel?: string;
     isSvg: boolean;
     isVisible: boolean;
     location: "header" | "body" | "footer";
@@ -61,6 +62,7 @@ export interface BrandingLLMInput {
     };
     href?: string;
     source: string;
+    logoSvgScore?: number;
   }>;
   brandName?: string;
   backgroundCandidates?: Array<{
@@ -72,6 +74,7 @@ export interface BrandingLLMInput {
   screenshot?: string;
   url: string;
   teamId?: string;
+  teamFlags?: { debugBranding?: boolean } | null;
 }
 
 /**
@@ -135,6 +138,7 @@ export interface BrandingScriptReturn {
   logoCandidates?: Array<{
     src: string;
     alt: string;
+    ariaLabel?: string;
     isSvg: boolean;
     isVisible: boolean;
     location: "header" | "body" | "footer";
@@ -148,6 +152,7 @@ export interface BrandingScriptReturn {
     };
     href?: string;
     source: string;
+    logoSvgScore?: number;
   }>;
   brandName?: string;
   typography: {

@@ -167,5 +167,43 @@ export interface BrandingProfile {
     };
     confidence: number;
   };
+  __llm_logo_reasoning?: {
+    selectedIndex: number;
+    reasoning: string;
+    confidence: number;
+    rejected?: boolean;
+  };
+  __llm_metadata?: {
+    logoSelection: {
+      llmCalled: boolean;
+      llmSucceeded: boolean;
+      finalSource: "llm" | "heuristic" | "fallback" | "none";
+      error?: string;
+    };
+    buttonClassification: {
+      llmCalled: boolean;
+      llmSucceeded: boolean;
+      error?: string;
+    };
+  };
+  __logo_candidates?: Array<{
+    src: string;
+    alt: string;
+    ariaLabel?: string;
+    isSvg: boolean;
+    isVisible: boolean;
+    location: "header" | "body" | "footer";
+    position: { top: number; left: number; width: number; height: number };
+    indicators: {
+      inHeader: boolean;
+      altMatch: boolean;
+      srcMatch: boolean;
+      classMatch: boolean;
+      hrefMatch: boolean;
+    };
+    href?: string;
+    source: string;
+    logoSvgScore?: number;
+  }>;
   [key: string]: unknown;
 }

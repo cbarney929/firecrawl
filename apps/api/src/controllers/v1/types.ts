@@ -1265,6 +1265,7 @@ export type TeamFlags = {
   extractV3Beta?: boolean;
   agentBeta?: boolean;
   bypassCreditChecks?: boolean;
+  debugBranding?: boolean;
 } | null;
 
 export type AuthCreditUsageChunkFromTeam = Omit<

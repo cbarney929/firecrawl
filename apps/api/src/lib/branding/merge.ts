@@ -108,24 +108,28 @@ export function mergeBrandingResults(
         const height = selectedLogo.position?.height || 0;
         const isSmallSquareIcon =
           Math.abs(width - height) < 5 && width < 40 && width > 0;
-
-        const hasRedFlags =
-          isLanguageWord ||
-          isCommonMenuWord ||
-          isUIIcon ||
-          isSmallSquareIcon ||
-          isExternalLink;
+        const trustLLMForLogo = confidence >= 0.7;
+        const smallSquareIconLikelyUi =
+          isSmallSquareIcon &&
+          !(trustLLMForLogo && selectedLogo.indicators?.inHeader);
 
         // Only set logo if:
         // 1. Confidence is good (>= 0.5) OR
         // 2. Logo has very strong indicators (inHeader + hrefMatch + reasonable size)
-        // AND no red flags
+        // AND no red flags (small square icons are allowed only with strong indicators)
         const area = calculateLogoArea(selectedLogo.position);
         const hasReasonableSize = area >= 500 && area <= 100000;
         const hasStrongIndicators =
           selectedLogo.indicators?.inHeader &&
           selectedLogo.indicators?.hrefMatch &&
           hasReasonableSize;
+
+        const hasRedFlags =
+          isLanguageWord ||
+          isCommonMenuWord ||
+          isUIIcon ||
+          (smallSquareIconLikelyUi && !hasStrongIndicators) ||
+          isExternalLink;
 
         const shouldIncludeLogo =
           !hasRedFlags &&
@@ -150,7 +154,8 @@ export function mergeBrandingResults(
             if (isLanguageWord) redFlagReasons.push("language word");
             if (isCommonMenuWord) redFlagReasons.push("menu word");
             if (isUIIcon) redFlagReasons.push("UI icon");
-            if (isSmallSquareIcon) redFlagReasons.push("small square icon");
+            if (smallSquareIconLikelyUi && !hasStrongIndicators)
+              redFlagReasons.push("small square icon");
             if (isExternalLink) redFlagReasons.push("external link");
             rejectionReason = `Red flags detected (${redFlagReasons.join(", ")})`;
           }

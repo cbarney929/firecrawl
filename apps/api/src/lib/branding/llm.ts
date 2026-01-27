@@ -7,6 +7,12 @@ import { buildBrandingPrompt } from "./prompt";
 import { BrandingLLMInput } from "./types";
 import { getModel } from "../generic-ai";
 
+function isDebugBrandingEnabled(input: BrandingLLMInput): boolean {
+  return (
+    config.DEBUG_BRANDING === true || input.teamFlags?.debugBranding === true
+  );
+}
+
 export async function enhanceBrandingWithLLM(
   input: BrandingLLMInput,
 ): Promise<BrandingEnhancement> {
@@ -33,7 +39,20 @@ export async function enhanceBrandingWithLLM(
   const modelName = isComplexCase ? "gpt-4o" : "gpt-4o-mini";
   const model = getModel(modelName);
 
-  if (config.DEBUG_BRANDING === true) {
+  if (isDebugBrandingEnabled(input)) {
+    const logoCandidates = input.logoCandidates || [];
+    const logoCandidateFiles = logoCandidates.map(candidate => ({
+      src: candidate.src,
+      href: candidate.href,
+      alt: candidate.alt,
+      location: candidate.location,
+      width: Math.round(candidate.position?.width || 0),
+      height: Math.round(candidate.position?.height || 0),
+      isSvg: candidate.isSvg,
+      indicators: candidate.indicators,
+    }));
+    const screenshotLength = input.screenshot ? input.screenshot.length : 0;
+
     logger.info("LLM model selection", {
       model: modelName,
       buttonsCount,
@@ -41,6 +60,16 @@ export async function enhanceBrandingWithLLM(
       promptLength,
       hasScreenshot: !!input.screenshot,
       isComplexCase,
+    });
+
+    logger.info("LLM branding prompt (full)", { prompt });
+    logger.info("LLM branding input files", {
+      logoCandidates: logoCandidateFiles,
+      screenshot: {
+        provided: !!input.screenshot,
+        length: screenshotLength,
+        preview: input.screenshot ? input.screenshot.slice(0, 48) + "..." : "",
+      },
     });
 
     logger.debug("LLM branding prompt preview", {
@@ -88,7 +117,7 @@ export async function enhanceBrandingWithLLM(
       },
     });
 
-    if (config.DEBUG_BRANDING === true) {
+    if (isDebugBrandingEnabled(input)) {
       const reasoningPreview = result.reasoning
         ? result.reasoning.length > 1000
           ? result.reasoning.substring(0, 1000) + "..."
@@ -123,7 +152,18 @@ export async function enhanceBrandingWithLLM(
 
     return result.object;
   } catch (error) {
-    Sentry.captureException(error);
+    Sentry.withScope(scope => {
+      scope.setTag("feature", "branding-llm");
+      scope.setTag("model", modelName);
+      scope.setContext("branding_llm", {
+        url: input.url,
+        buttonsCount: input.buttons?.length || 0,
+        logoCandidatesCount: input.logoCandidates?.length || 0,
+        promptLength: prompt.length,
+        hasScreenshot: !!input.screenshot,
+      });
+      Sentry.captureException(error);
+    });
 
     logger.error("LLM branding enhancement failed", {
       error,
@@ -141,6 +181,24 @@ export async function enhanceBrandingWithLLM(
         confidence: 0,
       },
       colorRoles: {
+        primaryColor: "",
+        accentColor: "",
+        backgroundColor: "",
+        textPrimary: "",
+        confidence: 0,
+      },
+      personality: {
+        tone: "professional",
+        energy: "medium",
+        targetAudience: "unknown",
+      },
+      designSystem: {
+        framework: "unknown",
+        componentLibrary: "",
+      },
+      logoSelection: {
+        selectedLogoIndex: -1,
+        selectedLogoReasoning: "LLM failed",
         confidence: 0,
       },
     };

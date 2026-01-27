@@ -501,6 +501,75 @@ export const getBrandingScript = () => String.raw`
   const findImages = () => {
     const imgs = [];
     const logoCandidates = [];
+    const debugLogo =
+      typeof window !== "undefined" &&
+      !!window.__FIRECRAWL_DEBUG_BRANDING_LOGO;
+    const debugStats = debugLogo
+      ? {
+          attempted: 0,
+          added: 0,
+          skipped: {},
+          skipSamples: [],
+          candidateSamples: [],
+          selectorCounts: {},
+        }
+      : null;
+    const truncate = (value, max = 120) => {
+      if (!value) return "";
+      const str = String(value);
+      return str.length > max ? str.slice(0, max) + "..." : str;
+    };
+    const getDebugMeta = (el, rect) => {
+      if (!el) return {};
+      let href = "";
+      try {
+        const anchor = el.closest ? el.closest("a") : null;
+        href = anchor ? anchor.getAttribute("href") || "" : "";
+      } catch {}
+      return {
+        tag: el.tagName ? el.tagName.toLowerCase() : "",
+        id: el.id || "",
+        className: getClassNameString(el),
+        src: truncate(el.src || el.getAttribute?.("href") || ""),
+        alt: el.alt || "",
+        ariaLabel: el.getAttribute?.("aria-label") || "",
+        href: truncate(href),
+        rect: rect
+          ? {
+              w: Math.round(rect.width || 0),
+              h: Math.round(rect.height || 0),
+              top: Math.round(rect.top || 0),
+              left: Math.round(rect.left || 0),
+            }
+          : undefined,
+      };
+    };
+    const recordSkip = (reason, el, rect, details) => {
+      if (!debugStats) return;
+      debugStats.skipped[reason] = (debugStats.skipped[reason] || 0) + 1;
+      if (debugStats.skipSamples.length < 10) {
+        debugStats.skipSamples.push({
+          reason,
+          details,
+          ...getDebugMeta(el, rect),
+        });
+      }
+    };
+    const recordAdd = (candidate) => {
+      if (!debugStats) return;
+      debugStats.added += 1;
+      if (debugStats.candidateSamples.length < 5) {
+        debugStats.candidateSamples.push({
+          src: truncate(candidate.src),
+          alt: candidate.alt || "",
+          location: candidate.location,
+          isSvg: candidate.isSvg,
+          indicators: candidate.indicators,
+          width: Math.round(candidate.position?.width || 0),
+          height: Math.round(candidate.position?.height || 0),
+        });
+      }
+    };
     const push = (src, type) => {
       if (src) imgs.push({ type, src });
     };
@@ -522,6 +591,9 @@ export const getBrandingScript = () => String.raw`
     const collectLogoCandidate = (el, source) => {
       const rect = el.getBoundingClientRect();
       const style = getComputedStyleCached(el);
+      if (debugStats) {
+        debugStats.attempted += 1;
+      }
       const isVisible = (
         rect.width > 0 &&
         rect.height > 0 &&
@@ -535,7 +607,7 @@ export const getBrandingScript = () => String.raw`
       const bgImageUrl = extractBackgroundImageUrl(bgImage);
       const hasBackgroundLogo = bgImageUrl && (
         /logo/i.test(bgImageUrl) ||
-        el.closest('[class*="logo"], [id*="logo"]') !== null ||
+        el.closest('[class*="logo" i], [id*="logo" i]') !== null ||
         (el.tagName.toLowerCase() === 'a' && el.closest('header, nav, [role="banner"]') !== null)
       );
 
@@ -548,11 +620,14 @@ export const getBrandingScript = () => String.raw`
             (twitterImageSrc && imgSrc.includes(twitterImageSrc)) ||
             (ogImageSrc && ogImageSrc.includes(imgSrc)) ||
             (twitterImageSrc && twitterImageSrc.includes(imgSrc))) {
+          recordSkip("social-image-match", el, rect, { imgSrc });
           return;
         }
       }
 
-      const inHeader = el.closest('header, nav, [role="banner"], #navbar, [id*="navbar"], [class*="navbar"], [class*="header"]');
+      const inHeader = el.closest(
+        'header, nav, [role="banner"], #navbar, [id*="navbar" i], [class*="navbar" i], [id*="header" i], [class*="header" i]',
+      );
       
       // Check if element is inside a language switcher - be more specific
       // Skip small flag images (usually language flags) or elements inside language lists
@@ -563,6 +638,7 @@ export const getBrandingScript = () => String.raw`
       const langSwitcherParent = el.closest('ul[class*="lang"], li[class*="lang"], div[class*="lang"], nav[class*="lang"], [id*="lang"], [id*="language"]');
       
       if (isSmallFlagImage) {
+        recordSkip("small-flag", el, rect);
         return;
       }
       
@@ -580,12 +656,17 @@ export const getBrandingScript = () => String.raw`
         const hasExplicitLangIndicator = /lang-item|language-list|lang-switch|language-switch|lang-select|language-select/i.test(parentClasses);
         
         if (isLanguageList || isLanguageItem || isLanguageContainer || hasExplicitLangIndicator) {
+          recordSkip("language-switcher", el, rect, {
+            parentTagName: parentTagName,
+            parentClasses: parentClasses,
+          });
           return;
         }
       }
       
       const insideButton = el.closest('button, [role="button"], input[type="button"], input[type="submit"]');
       if (insideButton) {
+        recordSkip("inside-button", el, rect);
         return;
       }
       
@@ -613,6 +694,7 @@ export const getBrandingScript = () => String.raw`
       const isSearchIcon = hasSearchClass || hasSearchId || hasSearchAriaLabel || isInSearchForm || !!inSearchButton;
       
       if (isSearchIcon) {
+        recordSkip("search-icon", el, rect);
         return;
       }
       
@@ -627,12 +709,18 @@ export const getBrandingScript = () => String.raw`
           /logo|brand/i.test(elementId);
         
         if (!hasExplicitLogoIndicator) {
+          recordSkip("ui-icon", el, rect);
           return;
         }
       }
       
       const anchorParent = el.closest('a');
       const href = anchorParent ? (anchorParent.getAttribute('href') || '') : '';
+      const anchorAriaLabel = (anchorParent?.getAttribute('aria-label') || '').toLowerCase();
+      const ariaLabelHomeMatch =
+        /\bhome(page)?\b/.test(ariaLabel) ||
+        /\bhome(page)?\b/.test(anchorAriaLabel);
+      const candidateAriaLabel = ariaLabel || anchorAriaLabel || "";
       
       if (href && href.trim()) {
         const hrefLower = href.toLowerCase().trim();
@@ -653,6 +741,7 @@ export const getBrandingScript = () => String.raw`
           ];
           
           if (externalServiceDomains.some(domain => hrefLower.includes(domain))) {
+            recordSkip("external-service-domain", el, rect, { href });
             return;
           }
           
@@ -662,9 +751,15 @@ export const getBrandingScript = () => String.raw`
             const linkHostname = linkUrl.hostname.toLowerCase();
             
             if (linkHostname !== currentHostname) {
+              recordSkip("external-link-different-host", el, rect, {
+                href,
+                currentHostname,
+                linkHostname,
+              });
               return;
             }
           } catch (e) {
+            recordSkip("external-link-parse-error", el, rect, { href });
             return;
           }
         }
@@ -733,7 +828,7 @@ export const getBrandingScript = () => String.raw`
         alt = svgAriaLabel || svgTitle || svgText || svgId || "";
         altMatch = /logo/i.test(svgId) || /logo/i.test(svgAriaLabel) || /logo/i.test(svgTitle);
         classMatch = /logo/i.test(svgClass);
-        srcMatch = el.closest('[class*="logo"], [id*="logo"]') !== null;
+        srcMatch = el.closest('[class*="logo" i], [id*="logo" i]') !== null;
       } else {
         const imgId = el.id || "";
         alt = el.alt || "";
@@ -743,24 +838,48 @@ export const getBrandingScript = () => String.raw`
         altMatch = /logo/i.test(alt);
         
         const imgClass = getClassNameString(el);
-        classMatch = /logo/i.test(imgClass) || el.closest('[class*="logo"], [id*="logo"]') !== null || idMatch;
+        classMatch =
+          /logo/i.test(imgClass) ||
+          el.closest('[class*="logo" i], [id*="logo" i]') !== null ||
+          idMatch;
       }
       
       let src = "";
       
       if (isSvg) {
-        try {
-          const resolvedSvg = resolveSvgStyles(el);
-          const serializer = new XMLSerializer();
-          src = "data:image/svg+xml;utf8," + encodeURIComponent(serializer.serializeToString(resolvedSvg));
-        } catch (e) {
-          recordError('resolveSvgStyles', e);
+        const imageEl = el.querySelector("image");
+        const imageHref =
+          imageEl?.getAttribute("href") ||
+          imageEl?.getAttribute("xlink:href") ||
+          "";
+        if (imageHref) {
           try {
+            src = new URL(imageHref, window.location.origin).href;
+          } catch (e) {
+            src = imageHref;
+          }
+          if (!srcMatch) srcMatch = /logo/i.test(imageHref);
+        }
+
+        if (!src) {
+          try {
+            const resolvedSvg = resolveSvgStyles(el);
             const serializer = new XMLSerializer();
-            src = "data:image/svg+xml;utf8," + encodeURIComponent(serializer.serializeToString(el));
-          } catch (e2) {
-            recordError('XMLSerializer fallback', e2);
-            return;
+            src =
+              "data:image/svg+xml;utf8," +
+              encodeURIComponent(serializer.serializeToString(resolvedSvg));
+          } catch (e) {
+            recordError("resolveSvgStyles", e);
+            try {
+              const serializer = new XMLSerializer();
+              src =
+                "data:image/svg+xml;utf8," +
+                encodeURIComponent(serializer.serializeToString(el));
+            } catch (e2) {
+              recordError("XMLSerializer fallback", e2);
+              recordSkip("svg-serialize-failed", el, rect);
+              return;
+            }
           }
         }
       } else {
@@ -785,7 +904,9 @@ export const getBrandingScript = () => String.raw`
           
           // Update indicators for background-image logos
           if (!srcMatch) srcMatch = /logo/i.test(bgImageUrl);
-          if (!classMatch) classMatch = el.closest('[class*="logo"], [id*="logo"]') !== null;
+          if (!classMatch)
+            classMatch =
+              el.closest('[class*="logo" i], [id*="logo" i]') !== null;
         }
       }
 
@@ -809,11 +930,15 @@ export const getBrandingScript = () => String.raw`
           } catch (e) {}
         }
       }
+      if (!hrefMatch && ariaLabelHomeMatch) {
+        hrefMatch = true;
+      }
 
       if (src) {
         logoCandidates.push({
           src,
           alt,
+          ariaLabel: candidateAriaLabel,
           isSvg,
           isVisible,
           location: inHeader ? "header" : "body",
@@ -829,42 +954,54 @@ export const getBrandingScript = () => String.raw`
           source,
           logoSvgScore: isSvg ? logoSvgScore : 100, // Images get high score by default
         });
+        recordAdd(logoCandidates[logoCandidates.length - 1]);
+      } else {
+        recordSkip("missing-src", el, rect);
       }
     };
 
     const allLogoSelectors = [
       'header a img, header a svg, header img, header svg',
-      '[class*="header"] a img, [class*="header"] a svg, [class*="header"] img, [class*="header"] svg',
+      '[class*="header" i] a img, [class*="header" i] a svg, [class*="header" i] img, [class*="header" i] svg',
+      '[id*="header" i] a img, [id*="header" i] a svg, [id*="header" i] img, [id*="header" i] svg',
       'nav a img, nav a svg, nav img, nav svg',
       '[role="banner"] a img, [role="banner"] a svg, [role="banner"] img, [role="banner"] svg',
       '#navbar a img, #navbar a svg, #navbar img, #navbar svg',
-      '[id*="navbar"] a img, [id*="navbar"] a svg, [id*="navbar"] img, [id*="navbar"] svg',
-      '[class*="navbar"] a img, [class*="navbar"] a svg, [class*="navbar"] img, [class*="navbar"] svg',
-      'a[class*="logo"] img, a[class*="logo"] svg',
-      '[class*="logo"] img, [class*="logo"] svg',
-      '[id*="logo"] img, [id*="logo"] svg',
-      'img[class*="nav-logo"], svg[class*="nav-logo"]',
-      'img[class*="logo"], svg[class*="logo"]',
+      '[id*="navbar" i] a img, [id*="navbar" i] a svg, [id*="navbar" i] img, [id*="navbar" i] svg',
+      '[class*="navbar" i] a img, [class*="navbar" i] a svg, [class*="navbar" i] img, [class*="navbar" i] svg',
+      'a[class*="logo" i] img, a[class*="logo" i] svg',
+      '[class*="logo" i] img, [class*="logo" i] svg',
+      '[id*="logo" i] img, [id*="logo" i] svg',
+      'img[class*="nav-logo" i], svg[class*="nav-logo" i]',
+      'img[class*="logo" i], svg[class*="logo" i]',
     ];
 
     allLogoSelectors.forEach(selector => {
-      Array.from(document.querySelectorAll(selector)).forEach(el => {
+      const matches = Array.from(document.querySelectorAll(selector));
+      if (debugStats) {
+        debugStats.selectorCounts[selector] = matches.length;
+      }
+      matches.forEach(el => {
         collectLogoCandidate(el, selector);
       });
     });
 
     // Check for CSS background-image logos in logo containers and header links
     const logoContainerSelectors = [
-      '[class*="logo"] a',
-      '[id*="logo"] a',
-      'header a[class*="logo"]',
-      'header [class*="logo"] a',
-      'nav a[class*="logo"]',
-      'nav [class*="logo"] a',
+      '[class*="logo" i] a',
+      '[id*="logo" i] a',
+      'header a[class*="logo" i]',
+      'header [class*="logo" i] a',
+      'nav a[class*="logo" i]',
+      'nav [class*="logo" i] a',
     ];
     
     logoContainerSelectors.forEach(selector => {
-      Array.from(document.querySelectorAll(selector)).forEach(el => {
+      const matches = Array.from(document.querySelectorAll(selector));
+      if (debugStats) {
+        debugStats.selectorCounts[selector] = matches.length;
+      }
+      matches.forEach(el => {
         const style = getComputedStyleCached(el);
         const bgImage = style.getPropertyValue('background-image');
         const bgImageUrl = extractBackgroundImageUrl(bgImage);
@@ -880,7 +1017,10 @@ export const getBrandingScript = () => String.raw`
             style.opacity !== "0"
           );
           const hasReasonableSize = rect.width >= CONSTANTS.MIN_LOGO_SIZE && rect.height >= CONSTANTS.MIN_LOGO_SIZE;
-          const inLogoContext = el.closest('[class*="logo"], [id*="logo"], header, nav, [role="banner"]') !== null;
+          const inLogoContext =
+            el.closest(
+              '[class*="logo" i], [id*="logo" i], header, nav, [role="banner"]',
+            ) !== null;
           
           if (isVisible && hasReasonableSize && inLogoContext) {
             collectLogoCandidate(el, 'background-image-logo');
@@ -891,11 +1031,15 @@ export const getBrandingScript = () => String.raw`
 
     const excludeSelectors = '[class*="testimonial"], [class*="client"], [class*="partner"], [class*="customer"], [class*="case-study"], [id*="testimonial"], [id*="client"], [id*="partner"], [id*="customer"], [id*="case-study"], footer, [class*="footer"]';
     
-    Array.from(document.images).forEach(img => {
+    const allImages = Array.from(document.images);
+    if (debugStats) {
+      debugStats.selectorCounts["document.images"] = allImages.length;
+    }
+    allImages.forEach(img => {
       if (
         /logo/i.test(img.alt || "") ||
         /logo/i.test(img.src) ||
-        img.closest('[class*="logo"]')
+        img.closest('[class*="logo" i]')
       ) {
         if (!img.closest(excludeSelectors)) {
           collectLogoCandidate(img, "document.images");
@@ -903,7 +1047,11 @@ export const getBrandingScript = () => String.raw`
       }
     });
 
-    Array.from(document.querySelectorAll("svg")).forEach(svg => {
+    const allSvgs = Array.from(document.querySelectorAll("svg"));
+    if (debugStats) {
+      debugStats.selectorCounts["document.querySelectorAll(svg)"] = allSvgs.length;
+    }
+    allSvgs.forEach(svg => {
       const svgRect = svg.getBoundingClientRect();
       const alreadyCollected = logoCandidates.some(c => {
         if (!c.isSvg) return false;
@@ -912,10 +1060,16 @@ export const getBrandingScript = () => String.raw`
                Math.abs(c.position.width - svgRect.width) < 1 &&
                Math.abs(c.position.height - svgRect.height) < 1;
       });
-      if (alreadyCollected) return;
+      if (alreadyCollected) {
+        recordSkip("svg-already-collected", svg, svgRect);
+        return;
+      }
       
       const insideButton = svg.closest('button, [role="button"], input[type="button"], input[type="submit"]');
-      if (insideButton) return;
+      if (insideButton) {
+        recordSkip("svg-inside-button", svg, svgRect);
+        return;
+      }
       
       // Check for UI icon indicators
       const svgId = svg.id || "";
@@ -940,7 +1094,10 @@ export const getBrandingScript = () => String.raw`
       
       const isSearchIcon = hasSearchId || hasSearchClass || hasSearchAriaLabel || hasSearchTitle || isInSearchForm || !!inSearchButton;
       
-      if (isSearchIcon) return;
+      if (isSearchIcon) {
+        recordSkip("svg-search-icon", svg, svgRect);
+        return;
+      }
       
       // Skip other UI icons
       const isUIIcon = 
@@ -952,15 +1109,20 @@ export const getBrandingScript = () => String.raw`
       const hasLogoClass = /logo/i.test(svgClass);
       const hasLogoAriaLabel = /logo/i.test(svgAriaLabel);
       const hasLogoTitle = /logo/i.test(svgTitle);
-      const inHeaderNav = svg.closest('header, nav, [role="banner"], #navbar, [id*="navbar"], [class*="navbar"], [class*="header"]');
-      const inLogoContainer = svg.closest('[class*="logo"], [id*="logo"]');
+      const inHeaderNav = svg.closest(
+        'header, nav, [role="banner"], #navbar, [id*="navbar" i], [class*="navbar" i], [id*="header" i], [class*="header" i]',
+      );
+      const inLogoContainer = svg.closest('[class*="logo" i], [id*="logo" i]');
       const inHeaderNavArea = !!inHeaderNav;
       const inAnchorInHeader = svg.closest('a') && inHeaderNav;
       
       // If it looks like a UI icon, only collect if it has explicit logo indicators
       if (isUIIcon) {
         const hasExplicitLogoIndicator = hasLogoId || hasLogoClass || hasLogoAriaLabel || hasLogoTitle || inLogoContainer;
-        if (!hasExplicitLogoIndicator) return;
+        if (!hasExplicitLogoIndicator) {
+          recordSkip("svg-ui-icon", svg, svgRect);
+          return;
+        }
       }
       
       const shouldCollect = 
@@ -977,6 +1139,8 @@ export const getBrandingScript = () => String.raw`
         if (!svg.closest(excludeSelectors)) {
           collectLogoCandidate(svg, "document.querySelectorAll(svg)");
         }
+      } else {
+        recordSkip("svg-no-logo-indicator", svg, svgRect);
       }
     });
 
@@ -995,6 +1159,15 @@ export const getBrandingScript = () => String.raw`
     if (candidatesToPick.length > 0) {
       const best = candidatesToPick.reduce((best, candidate) => {
         if (!best) return candidate;
+
+        const candidateArea = candidate.position.width * candidate.position.height;
+        const bestArea = best.position.width * best.position.height;
+        const candidateIsTiny = candidateArea < CONSTANTS.MIN_SIGNIFICANT_AREA;
+        const bestIsTiny = bestArea < CONSTANTS.MIN_SIGNIFICANT_AREA;
+
+        // Prefer non-tiny candidates before considering format (avoid tiny UI icons)
+        if (candidateIsTiny && !bestIsTiny) return best;
+        if (!candidateIsTiny && bestIsTiny) return candidate;
         
         // Prefer images over SVGs (images are more likely to be actual logos)
         if (!candidate.isSvg && best.isSvg) return candidate;
@@ -1017,8 +1190,6 @@ export const getBrandingScript = () => String.raw`
         if (candidate.indicators.classMatch && !best.indicators.classMatch) return candidate;
         if (!candidate.indicators.classMatch && best.indicators.classMatch) return best;
         
-        const candidateArea = candidate.position.width * candidate.position.height;
-        const bestArea = best.position.width * best.position.height;
         const candidateTooSmall = candidate.position.width < CONSTANTS.MIN_LOGO_SIZE || candidate.position.height < CONSTANTS.MIN_LOGO_SIZE;
         const bestTooSmall = best.position.width < CONSTANTS.MIN_LOGO_SIZE || best.position.height < CONSTANTS.MIN_LOGO_SIZE;
         
