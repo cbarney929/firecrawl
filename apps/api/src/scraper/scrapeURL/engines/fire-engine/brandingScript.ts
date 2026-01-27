@@ -71,15 +71,104 @@ export const getBrandingScript = () => String.raw`
     }
   };
 
+  const resolveSvgUseElements = (svgClone, originalSvg) => {
+    // Find all <use> elements in the cloned SVG
+    const useElements = Array.from(svgClone.querySelectorAll("use"));
+    
+    for (const useEl of useElements) {
+      const href = useEl.getAttribute("href") || useEl.getAttribute("xlink:href");
+      if (!href) continue;
+      
+      // Extract ID from href (format: #id or url(#id))
+      const idMatch = href.match(/#([^)]+)/);
+      if (!idMatch) continue;
+      
+      const targetId = idMatch[1];
+      
+      // Try to find the referenced element in the original SVG context
+      // First check in the original SVG's defs or symbol
+      let referencedEl = originalSvg.querySelector("#" + targetId);
+      
+      // If not found, check in parent SVG or document
+      if (!referencedEl) {
+        // Check in parent SVG if this SVG is nested
+        let parent = originalSvg.parentElement;
+        while (parent && !referencedEl) {
+          if (parent.tagName === "svg" || parent.tagName === "SVG") {
+            referencedEl = parent.querySelector("#" + targetId);
+          }
+          parent = parent.parentElement;
+        }
+      }
+      
+      // If still not found, check document root (for symbols defined globally)
+      if (!referencedEl) {
+        referencedEl = document.getElementById(targetId);
+      }
+      
+      if (referencedEl && useEl.parentNode) {
+        // Clone the referenced element
+        const clonedRef = referencedEl.cloneNode(true);
+        
+        // If it's a <symbol>, we need to unwrap it and use its children
+        if (clonedRef.tagName === "symbol" || clonedRef.tagName === "SYMBOL") {
+          // Create a group to hold the symbol's children
+          const group = document.createElementNS("http://www.w3.org/2000/svg", "g");
+          
+          // Copy attributes from the use element to the group
+          Array.from(useEl.attributes).forEach(attr => {
+            if (attr.name !== "href" && attr.name !== "xlink:href") {
+              group.setAttribute(attr.name, attr.value);
+            }
+          });
+          
+          // Move all children from symbol to group
+          while (clonedRef.firstChild) {
+            group.appendChild(clonedRef.firstChild);
+          }
+          
+          // Replace use element with the group
+          useEl.parentNode.replaceChild(group, useEl);
+        } else {
+          // For other elements (like <g>), clone and replace
+          const clonedContent = clonedRef.cloneNode(true);
+          
+          // Copy attributes from use element
+          Array.from(useEl.attributes).forEach(attr => {
+            if (attr.name !== "href" && attr.name !== "xlink:href") {
+              if (clonedContent.setAttribute) {
+                clonedContent.setAttribute(attr.name, attr.value);
+              }
+            }
+          });
+          
+          // Replace use element with cloned content
+          useEl.parentNode.replaceChild(clonedContent, useEl);
+        }
+      }
+    }
+    
+    return svgClone;
+  };
+
   const resolveSvgStyles = svg => {
+    // Clone the SVG first
+    const svgClone = svg.cloneNode(true);
+    
+    // Resolve <use> elements in the clone (using original SVG for reference lookup)
+    const svgWithResolvedUse = resolveSvgUseElements(svgClone, svg);
+    
+    // For style resolution, we'll work with the original SVG structure
+    // to get computed styles, then try to apply them to the resolved clone
+    // Note: After resolving use elements, structure may differ, so we do our best
     const originalElements = [svg, ...svg.querySelectorAll("*")];
     const computedStyles = originalElements.map(el => ({
       el,
       computed: getComputedStyle(el),
     }));
 
-    const clone = svg.cloneNode(true);
-    const clonedElements = [clone, ...clone.querySelectorAll("*")];
+    // Get all elements from resolved SVG for style application
+    const clonedElements = [svgWithResolvedUse, ...svgWithResolvedUse.querySelectorAll("*")];
 
     const svgDefaults = {
       fill: "rgb(0, 0, 0)",
@@ -110,11 +199,14 @@ export const getBrandingScript = () => String.raw`
       }
     };
 
-    for (let i = 0; i < clonedElements.length; i++) {
+    // Map cloned elements to original elements by position
+    // Note: after resolving use elements, the structure might have changed,
+    // so we need to be careful with the mapping
+    for (let i = 0; i < Math.min(clonedElements.length, originalElements.length); i++) {
       const clonedEl = clonedElements[i];
       const originalEl = originalElements[i];
       const computed = computedStyles[i]?.computed;
-      if (!computed) continue;
+      if (!computed || !clonedEl) continue;
 
       const allProps = [
         "fill",
@@ -138,7 +230,7 @@ export const getBrandingScript = () => String.raw`
       }
     }
 
-    return clone;
+    return svgWithResolvedUse;
   };
 
   const collectCSSData = () => {
