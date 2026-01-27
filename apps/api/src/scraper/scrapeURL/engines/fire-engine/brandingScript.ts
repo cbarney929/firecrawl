@@ -512,6 +512,13 @@ export const getBrandingScript = () => String.raw`
       "twitter",
     );
 
+    const extractBackgroundImageUrl = (bgImage) => {
+      if (!bgImage || bgImage === 'none') return null;
+      // Match url(...) or url("...") or url('...')
+      const match = bgImage.match(/url\(['"]?([^'"]+)['"]?\)/);
+      return match ? match[1] : null;
+    };
+
     const collectLogoCandidate = (el, source) => {
       const rect = el.getBoundingClientRect();
       const style = getComputedStyleCached(el);
@@ -521,6 +528,15 @@ export const getBrandingScript = () => String.raw`
         style.display !== "none" &&
         style.visibility !== "hidden" &&
         style.opacity !== "0"
+      );
+
+      // Check for CSS background-image logos (common pattern)
+      const bgImage = style.getPropertyValue('background-image');
+      const bgImageUrl = extractBackgroundImageUrl(bgImage);
+      const hasBackgroundLogo = bgImageUrl && (
+        /logo/i.test(bgImageUrl) ||
+        el.closest('[class*="logo"], [id*="logo"]') !== null ||
+        (el.tagName.toLowerCase() === 'a' && el.closest('header, nav, [role="banner"]') !== null)
       );
 
       const imgSrc = el.src || '';
@@ -538,10 +554,32 @@ export const getBrandingScript = () => String.raw`
 
       const inHeader = el.closest('header, nav, [role="banner"], #navbar, [id*="navbar"], [class*="navbar"], [class*="header"]');
       
-      const langSwitcherParent = el.closest('[class*="lang"], [class*="language"], [class*="locale"], [class*="i18n"], [class*="translation"], [class*="switcher"], [id*="lang"], [id*="language"], [id*="locale"]');
+      // Check if element is inside a language switcher - be more specific
+      // Skip small flag images (usually language flags) or elements inside language lists
+      const isSmallFlagImage = rect.width <= 20 && rect.height <= 20 && 
+                               (el.src && /flag|lang|country/i.test(el.src.toLowerCase()));
+      
+      // Check if inside language switcher containers
+      const langSwitcherParent = el.closest('ul[class*="lang"], li[class*="lang"], div[class*="lang"], nav[class*="lang"], [id*="lang"], [id*="language"]');
+      
+      if (isSmallFlagImage) {
+        return;
+      }
+      
       if (langSwitcherParent) {
         const parentClasses = getClassNameString(langSwitcherParent).toLowerCase();
-        if (/lang|language|locale|i18n|translation|switcher|selector|dropdown/i.test(parentClasses)) {
+        const parentTagName = langSwitcherParent.tagName;
+        
+        // Only skip if it's clearly a language switcher (has language-related classes AND is in a list/container)
+        const isLanguageList = parentTagName === 'UL' && /lang|language/i.test(parentClasses);
+        const isLanguageItem = parentTagName === 'LI' && /lang|language/i.test(parentClasses);
+        const isLanguageContainer = (parentTagName === 'DIV' || parentTagName === 'NAV') && 
+                                    /header-lang|lang-switch|language-switch|lang-select|language-select|language-list/i.test(parentClasses);
+        
+        // Also check if parent has explicit language switcher indicators
+        const hasExplicitLangIndicator = /lang-item|language-list|lang-switch|language-switch|lang-select|language-select/i.test(parentClasses);
+        
+        if (isLanguageList || isLanguageItem || isLanguageContainer || hasExplicitLangIndicator) {
           return;
         }
       }
@@ -556,13 +594,27 @@ export const getBrandingScript = () => String.raw`
       const elementId = (el.id || '').toLowerCase();
       const ariaLabel = (el.getAttribute?.('aria-label') || '').toLowerCase();
       
-      const isSearchIcon = 
-        /search|magnif/i.test(elementClasses) ||
-        /search|magnif/i.test(elementId) ||
-        /search/i.test(ariaLabel) ||
-        el.closest('[class*="search"], [id*="search"], [role="search"]');
+      // Check if element itself has search indicators
+      const hasSearchClass = /search|magnif/i.test(elementClasses);
+      const hasSearchId = /search|magnif/i.test(elementId);
+      const hasSearchAriaLabel = /search/i.test(ariaLabel);
       
-      if (isSearchIcon) return;
+      // Only check immediate parent context, not all ancestors
+      // Skip if inside a search form, search button, or search input container
+      const parent = el.parentElement;
+      const isInSearchForm = parent && (
+        parent.tagName === 'FORM' && /search/i.test(getClassNameString(parent) + (parent.id || '')) ||
+        parent.matches && parent.matches('form[class*="search"], form[id*="search"], button[class*="search"], button[id*="search"], [role="search"]')
+      );
+      
+      // Also check if it's inside a button/link that has search-related classes
+      const inSearchButton = el.closest('button[class*="search"], button[id*="search"], a[class*="search"], a[id*="search"]');
+      
+      const isSearchIcon = hasSearchClass || hasSearchId || hasSearchAriaLabel || isInSearchForm || !!inSearchButton;
+      
+      if (isSearchIcon) {
+        return;
+      }
       
       const isUIIcon = 
         /icon|menu|hamburger|bars|close|times|cart|user|account|profile|settings|notification|bell|chevron|arrow|caret|dropdown/i.test(elementClasses) ||
@@ -574,7 +626,9 @@ export const getBrandingScript = () => String.raw`
           /logo|brand|site-name|site-title/i.test(elementClasses) ||
           /logo|brand/i.test(elementId);
         
-        if (!hasExplicitLogoIndicator) return;
+        if (!hasExplicitLogoIndicator) {
+          return;
+        }
       }
       
       const anchorParent = el.closest('a');
@@ -617,6 +671,51 @@ export const getBrandingScript = () => String.raw`
       }
       
       const isSvg = el.tagName.toLowerCase() === "svg";
+      
+      // Calculate logo score for SVGs (higher = more likely to be a graphic logo vs text)
+      let logoSvgScore = 0;
+      if (isSvg) {
+        const rect = el.getBoundingClientRect();
+        const svgWidth = rect.width || parseFloat(el.getAttribute('width')) || 0;
+        const svgHeight = rect.height || parseFloat(el.getAttribute('height')) || 0;
+        
+        // Check for text elements (negative indicator - text SVGs are less likely to be logos)
+        const hasTextElements = el.querySelector('text') !== null;
+        if (hasTextElements) {
+          logoSvgScore -= 50;
+        }
+        
+        // Check for animations (positive indicator - animated SVGs are often logos)
+        const hasAnimations = el.querySelector('animate, animateTransform, animateMotion') !== null;
+        if (hasAnimations) {
+          logoSvgScore += 30;
+        }
+        
+        // Count paths and groups (more complex = more likely to be graphic logo)
+        const pathCount = el.querySelectorAll('path').length;
+        const groupCount = el.querySelectorAll('g').length;
+        logoSvgScore += Math.min(pathCount * 2, 40); // Cap at 40 points
+        logoSvgScore += Math.min(groupCount, 20); // Cap at 20 points
+        
+        // Prefer larger SVGs (graphic logos are usually larger than text)
+        const area = svgWidth * svgHeight;
+        if (area > 10000) logoSvgScore += 20; // Large SVGs
+        else if (area > 5000) logoSvgScore += 10;
+        else if (area < 1000) logoSvgScore -= 20; // Very small SVGs are often text
+        
+        // Prefer square-ish SVGs (icons/logos are often square)
+        if (svgWidth > 0 && svgHeight > 0) {
+          const aspectRatio = Math.max(svgWidth, svgHeight) / Math.min(svgWidth, svgHeight);
+          if (aspectRatio < 1.5) logoSvgScore += 10; // Square-ish
+          else if (aspectRatio > 5) logoSvgScore -= 15; // Very wide/tall (likely text)
+        }
+        
+        // Check if it looks like text (simple paths forming letters)
+        if (pathCount > 0 && pathCount < 20 && groupCount === 0 && !hasAnimations) {
+          // Simple structure with few paths might be text
+          logoSvgScore -= 30;
+        }
+      }
       
       let alt = "";
       let srcMatch = false;
@@ -666,6 +765,28 @@ export const getBrandingScript = () => String.raw`
         }
       } else {
         src = el.src || "";
+        
+        // If no src but has background-image logo, use that
+        if (!src && hasBackgroundLogo && bgImageUrl) {
+          // Convert relative URL to absolute
+          try {
+            const url = new URL(bgImageUrl, window.location.origin);
+            src = url.href;
+          } catch (e) {
+            // If URL parsing fails, try to construct it manually
+            if (bgImageUrl.startsWith('/')) {
+              src = window.location.origin + bgImageUrl;
+            } else if (bgImageUrl.startsWith('http://') || bgImageUrl.startsWith('https://')) {
+              src = bgImageUrl;
+            } else {
+              src = window.location.origin + '/' + bgImageUrl;
+            }
+          }
+          
+          // Update indicators for background-image logos
+          if (!srcMatch) srcMatch = /logo/i.test(bgImageUrl);
+          if (!classMatch) classMatch = el.closest('[class*="logo"], [id*="logo"]') !== null;
+        }
       }
 
       if (href) {
@@ -706,6 +827,7 @@ export const getBrandingScript = () => String.raw`
           },
           href: href || undefined,
           source,
+          logoSvgScore: isSvg ? logoSvgScore : 100, // Images get high score by default
         });
       }
     };
@@ -728,6 +850,42 @@ export const getBrandingScript = () => String.raw`
     allLogoSelectors.forEach(selector => {
       Array.from(document.querySelectorAll(selector)).forEach(el => {
         collectLogoCandidate(el, selector);
+      });
+    });
+
+    // Check for CSS background-image logos in logo containers and header links
+    const logoContainerSelectors = [
+      '[class*="logo"] a',
+      '[id*="logo"] a',
+      'header a[class*="logo"]',
+      'header [class*="logo"] a',
+      'nav a[class*="logo"]',
+      'nav [class*="logo"] a',
+    ];
+    
+    logoContainerSelectors.forEach(selector => {
+      Array.from(document.querySelectorAll(selector)).forEach(el => {
+        const style = getComputedStyleCached(el);
+        const bgImage = style.getPropertyValue('background-image');
+        const bgImageUrl = extractBackgroundImageUrl(bgImage);
+        
+        if (bgImageUrl) {
+          // Check if this looks like a logo (has reasonable size and is in header/logo container)
+          const rect = el.getBoundingClientRect();
+          const isVisible = (
+            rect.width > 0 &&
+            rect.height > 0 &&
+            style.display !== "none" &&
+            style.visibility !== "hidden" &&
+            style.opacity !== "0"
+          );
+          const hasReasonableSize = rect.width >= CONSTANTS.MIN_LOGO_SIZE && rect.height >= CONSTANTS.MIN_LOGO_SIZE;
+          const inLogoContext = el.closest('[class*="logo"], [id*="logo"], header, nav, [role="banner"]') !== null;
+          
+          if (isVisible && hasReasonableSize && inLogoContext) {
+            collectLogoCandidate(el, 'background-image-logo');
+          }
+        }
       });
     });
 
@@ -766,12 +924,21 @@ export const getBrandingScript = () => String.raw`
       const svgTitle = svg.querySelector("title")?.textContent || "";
       
       // Skip search icons
-      const isSearchIcon = 
-        /search|magnif/i.test(svgId) ||
-        /search|magnif/i.test(svgClass) ||
-        /search/i.test(svgAriaLabel) ||
-        /search/i.test(svgTitle) ||
-        svg.closest('[class*="search"], [id*="search"], [role="search"]');
+      const hasSearchId = /search|magnif/i.test(svgId);
+      const hasSearchClass = /search|magnif/i.test(svgClass);
+      const hasSearchAriaLabel = /search/i.test(svgAriaLabel);
+      const hasSearchTitle = /search/i.test(svgTitle);
+      
+      // Only check immediate parent context, not all ancestors
+      const parent = svg.parentElement;
+      const isInSearchForm = parent && (
+        parent.tagName === 'FORM' && /search/i.test(getClassNameString(parent) + (parent.id || '')) ||
+        parent.matches && parent.matches('form[class*="search"], form[id*="search"], button[class*="search"], button[id*="search"], [role="search"]')
+      );
+      
+      const inSearchButton = svg.closest('button[class*="search"], button[id*="search"], a[class*="search"], a[id*="search"]');
+      
+      const isSearchIcon = hasSearchId || hasSearchClass || hasSearchAriaLabel || hasSearchTitle || isInSearchForm || !!inSearchButton;
       
       if (isSearchIcon) return;
       
@@ -828,6 +995,18 @@ export const getBrandingScript = () => String.raw`
     if (candidatesToPick.length > 0) {
       const best = candidatesToPick.reduce((best, candidate) => {
         if (!best) return candidate;
+        
+        // Prefer images over SVGs (images are more likely to be actual logos)
+        if (!candidate.isSvg && best.isSvg) return candidate;
+        if (candidate.isSvg && !best.isSvg) return best;
+        
+        // If both are SVGs, prefer the one with higher logo score (graphic logo vs text)
+        if (candidate.isSvg && best.isSvg) {
+          const candidateScore = candidate.logoSvgScore || 0;
+          const bestScore = best.logoSvgScore || 0;
+          if (candidateScore > bestScore) return candidate;
+          if (candidateScore < bestScore) return best;
+        }
         
         if (candidate.indicators.inHeader && !best.indicators.inHeader) return candidate;
         if (!candidate.indicators.inHeader && best.indicators.inHeader) return best;
