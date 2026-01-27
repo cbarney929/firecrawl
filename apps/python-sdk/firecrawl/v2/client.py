@@ -825,6 +825,7 @@ class FirecrawlClient:
         schema: Optional[Any] = None,
         integration: Optional[str] = None,
         max_credits: Optional[int] = None,
+        max_credits_threshold: Optional[float] = None,
         strict_constrain_to_urls: Optional[bool] = None,
         model: Optional[Literal["spark-1-pro", "spark-1-mini"]] = None,
         webhook: Optional[Union[str, AgentWebhookConfig]] = None,
@@ -837,6 +838,7 @@ class FirecrawlClient:
             schema: Target JSON schema for the output (dict or Pydantic BaseModel)
             integration: Integration tag/name
             max_credits: Maximum credits to use (optional)
+            max_credits_threshold: Threshold ratio for early partial emit (0-1]
             model: Model to use for the agent ("spark-1-pro" or "spark-1-mini")
             webhook: Webhook URL or configuration for notifications
         Returns:
@@ -849,6 +851,7 @@ class FirecrawlClient:
             schema=schema,
             integration=integration,
             max_credits=max_credits,
+            max_credits_threshold=max_credits_threshold,
             strict_constrain_to_urls=strict_constrain_to_urls,
             model=model,
             webhook=webhook,
@@ -864,6 +867,7 @@ class FirecrawlClient:
         poll_interval: int = 2,
         timeout: Optional[int] = None,
         max_credits: Optional[int] = None,
+        max_credits_threshold: Optional[float] = None,
         strict_constrain_to_urls: Optional[bool] = None,
         model: Optional[Literal["spark-1-pro", "spark-1-mini"]] = None,
         webhook: Optional[Union[str, AgentWebhookConfig]] = None,
@@ -878,10 +882,14 @@ class FirecrawlClient:
             poll_interval: Seconds between status checks
             timeout: Maximum seconds to wait (None for no timeout)
             max_credits: Maximum credits to use (optional)
+            max_credits_threshold: Threshold ratio for early partial emit (0-1]
             model: Model to use for the agent ("spark-1-pro" or "spark-1-mini")
             webhook: Webhook URL or configuration for notifications
         Returns:
             Final agent response when completed
+
+        Raises:
+            MaxCreditsExceededError: When the agent stops early due to max_credits_threshold.
         """
         return agent_module.agent(
             self.http_client,
@@ -892,6 +900,7 @@ class FirecrawlClient:
             poll_interval=poll_interval,
             timeout=timeout,
             max_credits=max_credits,
+            max_credits_threshold=max_credits_threshold,
             strict_constrain_to_urls=strict_constrain_to_urls,
             model=model,
             webhook=webhook,
