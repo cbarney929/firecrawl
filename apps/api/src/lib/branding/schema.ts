@@ -124,7 +124,9 @@ const brandingEnhancementSchemaWithLogo = baseBrandingEnhancementSchema.extend({
   }),
 });
 
-// Export function to get the appropriate schema based on whether logo candidates exist
+// Export function to get the appropriate schema based on whether logo candidates exist.
+// When hasLogoCandidates is false, the base schema (no logoSelection) is used so the LLM
+// is not required to return logoSelection; the prompt only asks for it when candidates exist.
 export function getBrandingEnhancementSchema(hasLogoCandidates: boolean) {
   return hasLogoCandidates
     ? brandingEnhancementSchemaWithLogo

@@ -110,25 +110,30 @@ export const getBrandingScript = () => String.raw`
         // Clone the referenced element
         const clonedRef = referencedEl.cloneNode(true);
         
-        // If it's a <symbol>, we need to unwrap it and use its children
+        // If it's a <symbol>, we need to unwrap it and use its children.
+        // Use <svg> (not <g>) so we can preserve the symbol's viewBox/preserveAspectRatio
+        // and keep <use>-style scaling; a plain <g> would drop that and render at wrong size.
         if (clonedRef.tagName === "symbol" || clonedRef.tagName === "SYMBOL") {
-          // Create a group to hold the symbol's children
-          const group = document.createElementNS("http://www.w3.org/2000/svg", "g");
+          const wrapper = document.createElementNS("http://www.w3.org/2000/svg", "svg");
           
-          // Copy attributes from the use element to the group
+          const viewBox = clonedRef.getAttribute("viewBox");
+          if (viewBox) wrapper.setAttribute("viewBox", viewBox);
+          const preserveAspectRatio = clonedRef.getAttribute("preserveAspectRatio");
+          if (preserveAspectRatio) wrapper.setAttribute("preserveAspectRatio", preserveAspectRatio);
+          
+          // Copy attributes from the use element (x, y, width, height, etc.)
           Array.from(useEl.attributes).forEach(attr => {
             if (attr.name !== "href" && attr.name !== "xlink:href") {
-              group.setAttribute(attr.name, attr.value);
+              wrapper.setAttribute(attr.name, attr.value);
             }
           });
           
-          // Move all children from symbol to group
+          // Move all children from symbol to wrapper
           while (clonedRef.firstChild) {
-            group.appendChild(clonedRef.firstChild);
+            wrapper.appendChild(clonedRef.firstChild);
           }
           
-          // Replace use element with the group
-          useEl.parentNode.replaceChild(group, useEl);
+          useEl.parentNode.replaceChild(wrapper, useEl);
         } else {
           // For other elements (like <g>), clone and replace
           const clonedContent = clonedRef.cloneNode(true);
@@ -782,7 +787,8 @@ export const getBrandingScript = () => String.raw`
       }
       
       // Fallback: try simple pattern for regular URLs
-      const simpleMatch = bgImage.match(/url\(([^)]+)\)/);
+      // Use non-greedy [^)]+? so multi-layer backgrounds like url(a), url(b) yield only the first URL
+      const simpleMatch = bgImage.match(/url\(([^)]+?)\)/);
       if (simpleMatch) {
         let url = simpleMatch[1].trim().replace(/^["']|["']$/g, ''); // Remove surrounding quotes if any
         
@@ -1133,20 +1139,29 @@ export const getBrandingScript = () => String.raw`
       }
 
       const inHeader = el.closest(
-        'header, nav, [role="banner"], #navbar, [id*="navbar" i], [class*="navbar" i], [id*="header" i], [class*="header" i]',
+        'header, nav, [role="banner"], #navbar, [id*="navbar" i], [class*="navbar" i], [id*="header" i], [class*="header" i], #taskbar, [id*="taskbar" i], [role="menubar"]',
       ) !== null;
       
       // Also check if parent link is in header (for divs inside links)
       const parentInHeader = parentLink && parentLink.closest(
-        'header, nav, [role="banner"], #navbar, [id*="navbar" i], [class*="navbar" i], [id*="header" i], [class*="header" i]',
+        'header, nav, [role="banner"], #navbar, [id*="navbar" i], [class*="navbar" i], [id*="header" i], [class*="header" i], #taskbar, [id*="taskbar" i], [role="menubar"]',
       ) !== null;
       
-      // Check if element is in a top-level navigation container (sticky/fixed at top, or first visible element)
-      // This catches cases where the header isn't a <header> element but acts like one
+      // Check if element is in a top-level navigation container (sticky/fixed at top, taskbar, menubar, or first visible element)
+      // This catches cases where the header isn't a <header> element but acts like one (e.g. PostHog taskbar)
       let inTopLevelNav = false;
       if (!inHeader && !parentInHeader) {
+        // Taskbar or menubar at top (e.g. PostHog: div#taskbar with role=menubar, no link)
+        const taskbarOrMenubar = el.closest('#taskbar, [id*="taskbar" i], [role="menubar"]');
+        if (taskbarOrMenubar) {
+          const barRect = taskbarOrMenubar.getBoundingClientRect();
+          if (barRect.top <= 80 && barRect.width > 0 && barRect.height > 0) {
+            inTopLevelNav = true;
+          }
+        }
+        
         const topLevelContainer = el.closest('[class*="sticky" i], [class*="fixed" i], [style*="position: sticky" i], [style*="position:fixed" i]');
-        if (topLevelContainer) {
+        if (!inTopLevelNav && topLevelContainer) {
           const containerRect = topLevelContainer.getBoundingClientRect();
           const containerStyle = getComputedStyleCached(topLevelContainer);
           const isAtTop = containerRect.top <= 50; // Within 50px of top
@@ -1212,6 +1227,12 @@ export const getBrandingScript = () => String.raw`
           (hasHomeHref || hasLogoAriaLabel || hasLogoDataAttr) // Has logo indicators
         );
         
+        // Allow if inside a top-level bar (taskbar, menubar) at top - first/primary visual is often the logo (e.g. PostHog)
+        // No link - just a button that opens menu; logo is the main visible brand at top-left
+        const inTaskbarOrMenubar = el.closest('#taskbar, [id*="taskbar" i], [role="menubar"]');
+        const isLogoInTopBar = inTaskbarOrMenubar && rect.top <= 120 && rect.left <= 450 &&
+          rect.width >= 24 && rect.height >= 12; // Wordmark-sized, not tiny icon
+        
         // Also allow if the button-like element itself has logo indicators
         const buttonHasLogoIndicators = insideButton && (
           /logo|brand/i.test(getClassNameString(insideButton)) ||
@@ -1226,7 +1247,7 @@ export const getBrandingScript = () => String.raw`
           /logo|brand/i.test(el.getAttribute('aria-label') || '')
         );
         
-        if (!isLogoInNavContext && !buttonHasLogoIndicators && !elementHasLogoIndicators) {
+        if (!isLogoInNavContext && !isLogoInTopBar && !buttonHasLogoIndicators && !elementHasLogoIndicators) {
           recordSkip("inside-button", el, rect);
           return;
         }
@@ -1266,9 +1287,20 @@ export const getBrandingScript = () => String.raw`
         /menu|close|cart|user|settings/i.test(ariaLabel);
       
       if (isUIIcon) {
+        // Also check parent link for logo indicators (e.g. data-nav="logo", data-ga-name="gitlab logo", aria-label="Home")
+        const parentLinkForLogo = el.closest('a');
+        const parentDataNav = parentLinkForLogo?.getAttribute('data-nav') || '';
+        const parentDataGaName = parentLinkForLogo?.getAttribute('data-ga-name') || '';
+        const parentLinkAriaLabel = parentLinkForLogo?.getAttribute('aria-label') || '';
+        const parentLinkHref = parentLinkForLogo?.getAttribute('href') || '';
+        
         const hasExplicitLogoIndicator = 
           /logo|brand|site-name|site-title/i.test(elementClasses) ||
-          /logo|brand/i.test(elementId);
+          /logo|brand/i.test(elementId) ||
+          /logo|brand/i.test(parentDataNav) ||
+          /logo|brand/i.test(parentDataGaName) ||
+          /\bhome\b/i.test(parentLinkAriaLabel) ||
+          isHomeHref(parentLinkHref);
         
         if (!hasExplicitLogoIndicator) {
           recordSkip("ui-icon", el, rect);
@@ -1746,7 +1778,10 @@ export const getBrandingScript = () => String.raw`
       '[role="banner"] a img, [role="banner"] a svg, [role="banner"] img, [role="banner"] svg',
       '#navbar a img, #navbar a svg, #navbar img, #navbar svg',
       '[id*="navbar" i] a img, [id*="navbar" i] a svg, [id*="navbar" i] img, [id*="navbar" i] svg',
+      '[id*="navigation" i] a img, [id*="navigation" i] a svg, [id*="navigation" i] img, [id*="navigation" i] svg',
       '[class*="navbar" i] a img, [class*="navbar" i] a svg, [class*="navbar" i] img, [class*="navbar" i] svg',
+      'a[data-nav*="logo" i] img, a[data-nav*="logo" i] svg',
+      'a[data-ga-name*="logo" i] img, a[data-ga-name*="logo" i] svg',
       'a[class*="logo" i] img, a[class*="logo" i] svg',
       'a[data-qa*="logo" i] img, a[data-qa*="logo" i] svg',
       'a[aria-label*="logo" i] img, a[aria-label*="logo" i] svg',
@@ -1758,6 +1793,10 @@ export const getBrandingScript = () => String.raw`
       // These are often logos even if not in header/nav
       'a[href="/"] svg, a[href="./"] svg',
       'a[href="/"] img, a[href="./"] img',
+      // Taskbar/menubar at top (e.g. PostHog: logo in button, no link)
+      '#taskbar svg, #taskbar img',
+      '[id*="taskbar" i] svg, [id*="taskbar" i] img',
+      '[role="menubar"] svg, [role="menubar"] img',
     ];
 
     allLogoSelectors.forEach(selector => {
@@ -2048,8 +2087,14 @@ export const getBrandingScript = () => String.raw`
       
       const insideButton = svg.closest('button, [role="button"], input[type="button"], input[type="submit"]');
       if (insideButton) {
-        recordSkip("svg-inside-button", svg, svgRect);
-        return;
+        // Allow SVG in button when it's the primary logo in a taskbar/menubar at top (e.g. PostHog)
+        const inTaskbarOrMenubar = svg.closest('#taskbar, [id*="taskbar" i], [role="menubar"]');
+        const isTopBarLogo = inTaskbarOrMenubar && svgRect.top <= 120 && svgRect.left <= 450 &&
+          svgRect.width >= 24 && svgRect.height >= 12; // Wordmark-sized
+        if (!isTopBarLogo) {
+          recordSkip("svg-inside-button", svg, svgRect);
+          return;
+        }
       }
       
       // Check for UI icon indicators
@@ -2091,7 +2136,7 @@ export const getBrandingScript = () => String.raw`
       const hasLogoAriaLabel = /logo/i.test(svgAriaLabel);
       const hasLogoTitle = /logo/i.test(svgTitle);
       const inHeaderNav = svg.closest(
-        'header, nav, [role="banner"], #navbar, [id*="navbar" i], [class*="navbar" i], [id*="header" i], [class*="header" i]',
+        'header, nav, [role="banner"], #navbar, [id*="navbar" i], [class*="navbar" i], [id*="header" i], [class*="header" i], #taskbar, [id*="taskbar" i], [role="menubar"]',
       );
       const inLogoContainer = svg.closest('[class*="logo" i], [id*="logo" i]');
       const inHeaderNavArea = !!inHeaderNav;
